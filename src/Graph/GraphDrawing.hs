@@ -82,9 +82,9 @@ layeredGraph cross graph =
     newGraph =
       ( -- subgraphWindows .
         yCoordinateAssignement
-          .
+          -- .
           --                     primitiveYCoordinateAssignement .
-          (crossingReduction 1 cross)
+          . (crossingReduction 1 cross)
           . sortLayers
           . addConnectionVertices
           . longestPathAlgo

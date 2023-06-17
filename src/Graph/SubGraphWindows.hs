@@ -29,6 +29,7 @@ import qualified Graph.AjaxStructures as Ajax
 import Graph.CommonGraph (bb, childrenSeparating, lb, lbb, ltb, mid, parentsVertical, rb, rbb, rtb, tb)
 import Graph.IntMap (nodes)
 import qualified Graph.IntMap as Graph
+import Graph.GraphDrawing (getColumns, getRows)
 
 data Span = SpanLeftBorder | SpanMiddle | SpanRightBorder | SpanOutside deriving (Show)
 
@@ -231,52 +232,3 @@ type X = Int
 
 type Y = Int
 
-getColumns :: CGraphL -> (Map X [UINode], Map.Map Int [Column])
-getColumns (gr, m) = (Map.fromList cols, Map.fromList (zip [0 ..] (divideTables cols)))
-  where
-    cols =
-      map
-        tupleWithX
-        ( ( (map (sortBy sorty))
-              . (groupBy groupx)
-              . (sortBy sortx)
-          )
-            (map fromIntegral (Graph.nodes gr))
-        )
-    tupleWithX :: [UINode] -> (X, [UINode])
-    tupleWithX ls = (maybe 0 fst (Map.lookup (myhead 504 ls) m), ls)
-    groupx n0 n1 = (maybe 0 fst (Map.lookup n0 m)) == (maybe 0 fst (Map.lookup n1 m))
-    sortx n0 n1 = compare (maybe 0 fst (Map.lookup n0 m)) (maybe 0 fst (Map.lookup n1 m))
-    sorty n0 n1 = compare (maybe 0 snd (Map.lookup n0 m)) (maybe 0 snd (Map.lookup n1 m))
-
-    -- There can be several graphs on the screen that are connected with separating edges
-    divideTables :: [Column] -> [[Column]]
-    divideTables [] = []
-    divideTables layers = layersWithoutSep : (divideTables rest)
-      where
-        (layersWithoutSep, rest) = sumLayers ([], layers)
-        sumLayers :: ([Column], [Column]) -> ([Column], [Column])
-        sumLayers (s, []) = (s, [])
-        sumLayers (s, l : ls)
-          | containsSeparatingEdge (snd l) = (s ++ [l], ls)
-          | otherwise = sumLayers (s ++ [l], ls)
-        containsSeparatingEdge ns = or (map cs ns)
-        cs n = VU.length (childrenSeparating gr n) > 0
-
-getRows :: CGraphL -> Map Y [UINode]
-getRows (gr, m) =
-  Map.fromList $
-    map
-      tupleWithY
-      ( ( (map (sortBy sortx))
-            . (groupBy groupy)
-            . (sortBy sorty)
-        )
-          (map fromIntegral (Graph.nodes gr))
-      )
-  where
-    tupleWithY :: [UINode] -> (Y, [UINode])
-    tupleWithY ls = (maybe 0 snd (Map.lookup (myhead 504 ls) m), ls)
-    groupy n0 n1 = (maybe 0 snd (Map.lookup n0 m)) == (maybe 0 snd (Map.lookup n1 m))
-    sortx n0 n1 = compare (maybe 0 fst (Map.lookup n0 m)) (maybe 0 fst (Map.lookup n1 m))
-    sorty n0 n1 = compare (maybe 0 snd (Map.lookup n0 m)) (maybe 0 snd (Map.lookup n1 m))

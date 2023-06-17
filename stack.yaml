@@ -14,9 +14,19 @@ extra-deps:
 - miso-1.8.0.0
 - ref-tf-0.4.0.2
 - servant-lucid-0.9.0.3
-- git: https://github.com/tkvogt/permutation.git
-  commit: c706feb79af45c975d4448fd666a8863e3d72766
-
+- SVGFonts-1.8.0.1
+- diagrams-1.4.0.1
+- diagrams-lib-1.4.5.3
+- diagrams-svg-1.4.3.1
+- diagrams-core-1.5.1
+- diagrams-contrib-1.4.5
+- force-layout-0.4.0.6
+- monoid-extras-0.6.2
+- dual-tree-0.2.3.1
+- svg-builder-0.1.1
+- active-0.2.0.17
+- fsnotify-0.4.1.0
+- lens-5.2.2
 # Override default flag values for local packages and extra-deps
 flags: {}
 

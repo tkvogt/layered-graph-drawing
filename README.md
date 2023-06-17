@@ -20,13 +20,13 @@ If a connection line passes over several layers, a node has to be added in every
 
 ![Longest path](https://raw.githubusercontent.com/BeFunctional/layered-graph-drawing/main/graphs/g1.svg)
 
-4. Crossing Reduction
+3. Crossing Reduction
 
 ![Crossing reduction](https://raw.githubusercontent.com/BeFunctional/layered-graph-drawing/main/graphs/g2.svg)
 
 Using: [Simple and Eﬃcient Bilayer Cross Counting](http://ls11-www.cs.tu-dortmund.de/downloads/papers/BJM04.pdf)
 
-5. Y-placement (works, but is not an average of alignments)
+4. Y-placement (works, but is not an average of alignments)
 
 ![y placement](https://raw.githubusercontent.com/BeFunctional/layered-graph-drawing/main/graphs/g3.svg)
 

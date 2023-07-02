@@ -9,7 +9,7 @@ Algorithm for Layered Graph Drawing](https://www.elibm.org/ft/10011396000)
 
 Starting with
 
-1. A directed graph
+1. A directed graph without cycles
 
 ![Initial graph](https://raw.githubusercontent.com/BeFunctional/layered-graph-drawing/main/graphs/g0.svg)
 
@@ -30,13 +30,15 @@ Using: [Simple and Eﬃcient Bilayer Cross Counting](http://ls11-www.cs.tu-dortm
 
 ![y placement](https://raw.githubusercontent.com/BeFunctional/layered-graph-drawing/main/graphs/g3.svg)
 
-Using: [Fast and Simple Horizontal Coordinate Assignment](https://arxiv.org/abs/2008.01252)
+Using: [Fast and Simple Horizontal Coordinate Assignment](https://kops.uni-konstanz.de/server/api/core/bitstreams/e3f1cd1e-3fd4-422d-852e-77404160f664/content)
 
-## Algorithm extensions (vertical and virtual edges)
+## Algorithm extensions (vertical and virtual edges, sub fields)
 
-Sometimes nodes have to to drawn vertically below each other. To force the algorithm to do this, you have to connect them with vertical edges. The edges are not drawn, but guide the algorithm, which unfortunelty made the algorithms (especially longest path) more complex.
+* Sometimes nodes have to to drawn vertically below each other. To force the algorithm to do this, you have to connect them with vertical edges. The edges are not drawn, but guide the algorithm, which unfortunelty made the algorithms (especially longest path) more complex.
 
-Virtual edges are also not drawn but are used when several unconnected graphs have to be displayed in a a row. I don't know if this was the best decision.
+* Virtual edges are also not drawn but are used when several unconnected graphs have to be displayed in a a row. I don't know if this was the best decision.
+
+* A node can have sub fields, which is important when these sub fields are connected separately to other nodes. The number of this subfield (channel) is used in  Crossing reduction.
 
 ## Putting the graph in a box
 
@@ -47,3 +49,5 @@ This algorithm was implemented to develop a visual programming environment, whic
 ## TODO
  * Make graphs inside graphs look better by embedding a layouted graph inside a graph.
 
+## Example Usage
+  See app/Main.hs

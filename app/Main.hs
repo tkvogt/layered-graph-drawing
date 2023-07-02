@@ -10,153 +10,243 @@ module Main where
 
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
+import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word (Word32)
 import Debug.Trace (trace)
-import Diagrams.Backend.SVG.CmdLine
-import Diagrams.Prelude
-import Graph.AjaxStructures (CGraph, CGraphL, EdgeType (..), FunctionNode (..), PathInfo (..), SpecialNode (..), UIEdge (..), UINodeLabel (..))
-import Graph.GraphDrawing (fromAdj, layeredGraph, isConnNode)
+--import Diagrams.Backend.SVG.CmdLine (B, mainWith)
+--import Diagrams.Prelude
+import GHC.Generics
+import Graph.CommonGraph (CGraph, CGraphL, EdgeType (..), NodeClass (..), StandardEdge (..), UIEdge (..), UINode, UINodeLabel (..))
+import Graph.GraphDrawing (fromAdj, layeredGraph)
 import qualified Graph.IntMap as Graph
-import Graphics.SVGFonts (textSVG)
+--import Graphics.SVGFonts (textSVG)
 
-testGraph :: CGraph
-testGraph = fromAdj (extractNodes gr) gr where
-  gr = [ (0, [4, 5, 6, 20, 29], dEdge),
-         (17, [3], dEdge),
-         (5, [2, 3, 4, 10, 14, 26], dEdge),
-         (3, [4], dEdge),
-         (26, [18], dEdge),
-         (14, [10], dEdge),
-         (2, [8, 23], dEdge),
-         (18, [13], dEdge),
-         (10, [27], dEdge),
-         (2, [8, 23], dEdge),
-         (23, [24, 9], dEdge),
-         (24, [12, 15, 28], dEdge),
-         (1, [12], dEdge),
-         (12, [6, 9, 19], dEdge),
-         (6, [9, 13, 21, 25, 29], dEdge),
-         (29, [25], dEdge),
-         (21, [22], dEdge),
-         (25, [11], dEdge),
-         (22, [8, 9], dEdge),
-         (15, [27, 16], dEdge),
-         (8, [16, 20], dEdge),
-         (11, [16, 9], dEdge),
-         (16, [27], dEdge),
-         (27, [13, 19], dEdge),
-         (13, [20], dEdge),
-         (19, [9], dEdge),
-         (20, [4], dEdge),
-         (9, [4, 28], dEdge),
-         (28, [7], dEdge)
-       ]
+-- several papers use this graph
+testGraph :: CGraph (SpecialNode [Text]) UIEdgeLabel
+testGraph = fromAdj (extractNodes gr) gr
+  where
+    gr =
+      [ (0, [4, 5, 6, 20, 29], dEdge),
+        (17, [3], dEdge),
+        (5, [2, 3, 4, 10, 14, 26], dEdge),
+        (3, [4], dEdge),
+        (26, [18], dEdge),
+        (14, [10], dEdge),
+        (2, [8, 23], dEdge),
+        (18, [13], dEdge),
+        (10, [27], dEdge),
+        (2, [8, 23], dEdge),
+        (23, [24, 9], dEdge),
+        (24, [12, 15, 28], dEdge),
+        (1, [12], dEdge),
+        (12, [6, 9, 19], dEdge),
+        (6, [9, 13, 21, 25, 29], dEdge),
+        (29, [25], dEdge),
+        (21, [22], dEdge),
+        (25, [11], dEdge),
+        (22, [8, 9], dEdge),
+        (15, [27, 16], dEdge),
+        (8, [16, 20], dEdge),
+        (11, [16, 9], dEdge),
+        (16, [27], dEdge),
+        (27, [13, 19], dEdge),
+        (13, [20], dEdge),
+        (19, [9], dEdge),
+        (20, [4], dEdge),
+        (9, [4, 28], dEdge),
+        (28, [7], dEdge)
+      ]
 
-testGraph2 :: CGraph
-testGraph2 = fromAdj (extractNodes gr) gr where
-  gr = [ (1, [3, 4, 21, 13], dEdge),
-         (2, [3, 20], dEdge),
-         (3, [4, 5, 23], dEdge),
-         (4, [6], dEdge),
-         (5, [7], dEdge),
-         (6, [8, 16, 23], dEdge),
-         (7, [9], dEdge),
-         (8, [10, 11], dEdge),
-         (9, [12], dEdge),
-         (10, [13, 14, 15], dEdge),
-         (11, [15, 16], dEdge),
-         (12, [20], dEdge),
-         (13, [17], dEdge),
-         (14, [17, 18], dEdge),
-         (16, [18, 19, 20], dEdge),
-         (18, [21], dEdge),
-         (19, [22], dEdge),
-         (21, [23], dEdge),
-         (22, [23], dEdge),
-         (23, [24], dEdge),
-         (24, [25], dEdge),
-         (26, [27], dEdge),
-         (27, [28], dEdge),
-         (29, [30], dEdge),
-         (30, [31], dEdge),
-         (32, [31], dEdge),
-         (33, [31], dEdge),
-         (25, [34], dEdge),
-         --           (19, [26],       dEdge),
-         (23, [27], vdummyEdge),
-         (27, [30], vdummyEdge)
-       ]
+testGraph2 :: CGraph (SpecialNode [Text]) UIEdgeLabel
+testGraph2 = fromAdj (extractNodes gr) gr
+  where
+    gr =
+      [ (1, [3, 4, 21, 13], dEdge),
+        (2, [3, 20], dEdge),
+        (3, [4, 5, 23], dEdge),
+        (4, [6], dEdge),
+        (5, [7], dEdge),
+        (6, [8, 16, 23], dEdge),
+        (7, [9], dEdge),
+        (8, [10, 11], dEdge),
+        (9, [12], dEdge),
+        (10, [13, 14, 15], dEdge),
+        (11, [15, 16], dEdge),
+        (12, [20], dEdge),
+        (13, [17], dEdge),
+        (14, [17, 18], dEdge),
+        (16, [18, 19, 20], dEdge),
+        (18, [21], dEdge),
+        (19, [22], dEdge),
+        (21, [23], dEdge),
+        (22, [23], dEdge),
+        (23, [24], dEdge),
+        (24, [25], dEdge),
+        (26, [27], dEdge),
+        (27, [28], dEdge),
+        (29, [30], dEdge),
+        (30, [31], dEdge),
+        (32, [31], dEdge),
+        (33, [31], dEdge),
+        (25, [34], dEdge),
+        --           (19, [26],       dEdge),
+        (23, [27], vdummyEdge),
+        (27, [30], vdummyEdge)
+      ]
 
 -- A typical graph of three unconnected functions with one input and output.
 -- Should be displayed vertical as options
 -- Vertical lines between the function nodes give an order. If the graph grows the vertical nodes should
 -- still be in one column
-optionsGraph :: CGraph
-optionsGraph = fromAdj (extractNodes gr) gr where
-  gr = [ (1, [2], dEdge),
-         (2, [3], dEdge),
-         (4, [5], dEdge),
-         (5, [6], dEdge),
-         (7, [8], dEdge),
-         (8, [9], dEdge),
-         (9, [10], dEdge),
-         (2, [5], vdummyEdge),
-         (5, [8], vdummyEdge)
-       ]
-
-extractNodes :: [(Word32, [Word32], [UIEdge])] -> Map.Map Word32 UINodeLabel
-extractNodes adj = Map.fromList (map labelNode nodes)
+optionsGraph :: CGraph (SpecialNode [Text]) UIEdgeLabel
+optionsGraph = fromAdj (extractNodes gr) gr
   where
-    nodes = (map sel1 adj) ++ (concat (map sel2 adj))
-    sel1 (x,y,z) = x
-    sel2 (x,y,z) = y
-    labelNode n = (n, UINodeLabel
-        ( FuN
-            ( FunctionNode
-                ""
-                (T.pack (show n))
-                ""
-                ""
-                ""
-                False
-                False
-                False
-                (Nothing, Nothing)
-                1
-                JustConnected
-                False
-                0
-            )
-        )
-        Nothing
-        Nothing)
+    gr =
+      [ (1, [2], dEdge),
+        (2, [3], dEdge),
+        (4, [5], dEdge),
+        (5, [6], dEdge),
+        (7, [8], dEdge),
+        (8, [9], dEdge),
+        (9, [10], dEdge),
+        (2, [5], vdummyEdge),
+        (5, [8], vdummyEdge)
+      ]
 
-dEdge :: [UIEdge]
-dEdge = [UIEdge "standardEdge" Nothing Nothing Nothing Nothing Nothing "" Nothing 0 NormalEdge]
+dEdge :: [UIEdge UIEdgeLabel]
+dEdge = [UIEdge standard Nothing 0 NormalEdge]
 
 -- [UIEdge 2 1 "" Curly "#ff5863" "" 0 False False]
 
-vdummyEdge :: [UIEdge]
-vdummyEdge = [UIEdge "standardEdge" Nothing Nothing Nothing Nothing Nothing "" Nothing 0 VirtualHorEdge]
+vdummyEdge :: [UIEdge UIEdgeLabel]
+vdummyEdge = [UIEdge standard Nothing 0 VirtualHorEdge]
 
 -- [UIEdge 2 1 "" Curly "#ff5863" "" 0 True False]
+extractNodes :: [(Word32, [Word32], [UIEdge a])] -> Map.Map Word32 (UINodeLabel (SpecialNode [Text]))
+extractNodes adj = Map.fromList (map labelNode nodes)
+  where
+    nodes = (map sel1 adj) ++ (concat (map sel2 adj))
+    sel1 (x, y, z) = x
+    sel2 (x, y, z) = y
+    labelNode n =
+      ( n,
+        UINodeLabel
+          ( FuN
+              ( FunctionNode
+                  ""
+                  (T.pack (show n))
+                  ""
+              )
+          )
+          Nothing
+          Nothing
+      )
 
 main :: IO ()
-main = mainWith (visualGraph (layeredGraph True testGraph) :: Diagram B)
+main = return () -- mainWith (visualGraph (layeredGraph True testGraph) :: Diagram B)
 
 ------------------------------------------------------------------------------------------------
 
--- Using diagrams to visualise the graph (this is commented out, so that you only need the quite big diagrams dependency when using this for debugging)
+data UIEdgeLabel = UIEdgeLabel
+  { lineClass :: Text,
+    strokeWidth :: Maybe Int,
+    opacity :: Maybe Double,
+    dashArray :: Maybe Text,
+    lineColor :: Maybe Text,
+    lineName :: Text,
+    lineType :: Maybe LineType
+  }
+  deriving (Show)
 
-visualGraph :: CGraphL -> Diagram B
+data LineType
+  = Slanted Int -- a line consisiting of slanted sublines,
+  -- (a lot of people did this, but no famous)
+  | Curly -- contains a several subpaths
+  deriving (Show, Generic, Eq, Ord)
+
+data SpecialNode a
+  = FuN FunctionNode
+  | Case CaseNode
+  | SubN [a]
+  | DN DummyNode
+  | CN ConnectionNode
+  | AN ArgNode
+  deriving (Eq, Ord, Show, Generic)
+
+data DummyNode = DummyNode {dsize :: Int} deriving (Eq, Ord, Show, Generic)
+
+data ConnectionNode = ConnectionNode {size :: Int} deriving (Eq, Ord, Show, Generic)
+
+data FunctionNode = FunctionNode
+  { functionUnique :: Text,
+    functionName :: Text,
+    functionType :: Text -- maybe not displayed
+  }
+  deriving (Eq, Ord, Generic, Show)
+
+data CaseNode = CaseNode
+  { casePackage :: Text,
+    caseModule :: Text
+  }
+  deriving (Eq, Ord, Generic, Show)
+
+data ArgNode = ArgNode
+  { refFunctionUnique :: Text,
+    argName :: Text,
+    argNr :: Int,
+    isValueArg :: Bool,
+    isMainFunctionArg :: Bool,
+    argSelected :: Bool
+  }
+  deriving (Eq, Ord, Show, Generic)
+
+instance NodeClass (SpecialNode [Text]) where
+  isDummy gr n = maybe False isDummyLabel (Graph.lookupNode n gr)
+  isConnNode gr n = maybe False isConnLabel (Graph.lookupNode n gr)
+  isFunction gr n = maybe False isFuncLabel (Graph.lookupNode n gr)
+  isSubLabel (UINodeLabel (SubN _) _ _) = True
+  isSubLabel _ = False
+  connectionNode = CN (ConnectionNode 1)
+  isArgLabel (AN _) = True
+  isArgLabel _ = False
+
+  isMainArg gr n = False -- maybe False isArgLabel (Graph.lookupNode n gr)
+  subLabels (SubN as) = length as
+  dummyNode = DN (DummyNode 1)
+
+
+instance StandardEdge UIEdgeLabel where
+  standard = UIEdgeLabel "" Nothing Nothing Nothing Nothing "" Nothing
+
+isDummyLabel :: UINodeLabel (SpecialNode [Text]) -> Bool
+isDummyLabel (UINodeLabel (DN _) _ _) = True
+isDummyLabel _ = False
+
+isConnLabel :: UINodeLabel (SpecialNode [Text]) -> Bool
+isConnLabel (UINodeLabel (CN _) _ _) = True
+isConnLabel _ = False
+
+isFuncLabel :: UINodeLabel (SpecialNode [Text]) -> Bool
+isFuncLabel (UINodeLabel (FuN _) _ _) = True
+isFuncLabel _ = False
+
+isArgLabel :: UINodeLabel (SpecialNode [Text]) -> Bool
+isArgLabel (UINodeLabel (AN _) _ _) = True
+isArgLabel _ = False
+
+-----------------------------------------------------------------------------------------------
+
+-- Using diagrams to visualise the graph (this is commented out, so that you only need the quite big diagrams dependency when using this for debugging)
+{-
+visualGraph :: (NodeClass n, StandardEdge e) => CGraphL n e -> Diagram B
 visualGraph (g, nPositions) =
   Debug.Trace.trace (show (length shortEs) ++ " : " ++ show (length longEs) ++ show (Graph.nodes testGraph, Graph.nodes g)) $
     position graphNodes # connections shortEs
       # connectionsWithoutArrow longEs
   where
     graphNodes = catMaybes (map pos (Graph.nodes g))
-    pos n = fmap (\(x, y) -> (p2 ((fromIntegral x)*2, (fromIntegral y)), vNode (fromIntegral n))) lu
+    pos n = fmap (\(x, y) -> (p2 ((fromIntegral x) * 2, (fromIntegral y)), vNode (fromIntegral n))) lu
       where
         lu = Map.lookup (fromIntegral n) nPositions
     es = Graph.edges g
@@ -164,8 +254,6 @@ visualGraph (g, nPositions) =
     longEs = filter (\(src, tgt) -> (isConnNode g src) || (isConnNode g tgt)) es
     vNode :: Int -> Diagram B
     vNode n = visualNode (n > 31) (show n) -- (isDummyNode g (fromIntegral n)) (show n)
-
------------------------------------------------------------------------------------------------
 
 connections es
   | (length es) < 2 = id
@@ -188,8 +276,9 @@ connectionsWithoutArrow es
         es
 
 visualNode l str
-  | l = -- (stateLabel str <> 
-        dummy # named str
+  | l -- (stateLabel str <>
+    =
+    dummy # named str
   | otherwise = (stateLabel str <> state) # named str
 
 text' d s = (strokeP $ textSVG s 0.7) # lw none # fc black # center # showOrigin
@@ -219,3 +308,4 @@ arrowStyle2 =
   )
 
 arrowStyle3 = (with & arrowHead .~ noHead & arrowShaft .~ line) -- & shaftStyle %~ dashingG [0.1, 0.05] 0)
+-}

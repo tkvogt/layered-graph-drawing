@@ -15,8 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Graph.AjaxStructures
-                     , Graph.CommonGraph
+  exposed-modules:     Graph.CommonGraph
                      , Graph.GraphDrawing
                      , Graph.SubGraphWindows
   build-depends:       aeson
@@ -36,11 +35,11 @@ executable graph-drawing-exe
   build-depends:       base
                      , containers
                      , layered-graph-drawing
-                     , diagrams
-                     , diagrams-lib
-                     , diagrams-svg
+--                     , diagrams
+--                     , diagrams-lib
+--                     , diagrams-svg
                      , intmap-graph
-                     , SVGFonts
+--                     , SVGFonts
                      , text
 
   default-language:    Haskell2010

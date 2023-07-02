@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -14,22 +13,33 @@ import qualified Data.Map as Map
 import Data.Maybe (fromJust, fromMaybe, isJust)
 import qualified Data.Vector.Unboxed as VU
 import Debug.Trace
-import Graph.AjaxStructures
+import Graph.CommonGraph
   ( CGraph,
     CGraphL,
     Column,
-    DummyNode (..),
     LayerFeatures (..),
-    SpecialNode (..),
+    NodeClass (dummyNode, isArgLabel),
+    StandardEdge,
     UINode,
     UINodeLabel (..),
+    bb,
+    childrenSeparating,
+    layer,
+    lb,
+    lbb,
+    ltb,
+    mid,
     myhead,
+    nestingFeatures,
+    parentsVertical,
+    rb,
+    rbb,
+    rtb,
+    tb,
   )
-import qualified Graph.AjaxStructures as Ajax
-import Graph.CommonGraph (bb, childrenSeparating, lb, lbb, ltb, mid, parentsVertical, rb, rbb, rtb, tb)
+import Graph.GraphDrawing (getColumns, getRows)
 import Graph.IntMap (nodes)
 import qualified Graph.IntMap as Graph
-import Graph.GraphDrawing (getColumns, getRows)
 
 data Span = SpanLeftBorder | SpanMiddle | SpanRightBorder | SpanOutside deriving (Show)
 
@@ -40,11 +50,15 @@ type Layer = Int -- the nesting of the window:
 -- 1 -> not part of a window
 -- 2 -> first window layer
 
+type X = Int
+
+type Y = Int
+
 type Min = Int
 
 type Max = Int
 
-subgraphWindows :: VU.Unbox UINode => CGraphL -> CGraphL
+subgraphWindows :: StandardEdge e => (NodeClass n, Show n, VU.Unbox UINode) => CGraphL n e -> CGraphL n e
 subgraphWindows (graph, pos)
   | null ns = (graph, pos)
   | otherwise -- Debug.Trace.trace ("subgraphWindows "++ show (graph,pos,newGraph,normalisedPos) ++"\n") -- ++ -- show newGraph ++"\n"++
@@ -58,13 +72,13 @@ subgraphWindows (graph, pos)
         filledGraph
 
     changeNode n (UINodeLabel node Nothing vn)
-      | isArg node = UINodeLabel node (changeStyle l defaultFeatures) vn
+      | isArgLabel node = UINodeLabel node (changeStyle l defaultFeatures) vn
       | otherwise = UINodeLabel node (changeStyle l defaultFeatures) vn
       where
         l = highestLayer xy (spans zRows) (spans zColumns)
         xy = fromMaybe (0, 0) (Map.lookup (fromIntegral n) normalisedPos)
     changeNode n (UINodeLabel node nestingFeats vn)
-      | isArg node -- Debug.Trace.trace ("changeNode isArg" ++ show (l,xy,xy2,nestingFeats,changeStyle l nestingFeats)) $
+      | isArgLabel node -- Debug.Trace.trace ("changeNode isArg" ++ show (l,xy,xy2,nestingFeats,changeStyle l nestingFeats)) $
         =
         UINodeLabel node (changeStyle l (Just ((fromJust nestingFeats) {layer = fst l}))) vn
       | otherwise -- Debug.Trace.trace ("changeNode other" ++ show (l,xy)) $
@@ -76,10 +90,7 @@ subgraphWindows (graph, pos)
         _xy2 = fromMaybe (0, 0) (Map.lookup (fromIntegral root) normalisedPos)
         root = rootOf graph (fromIntegral n)
 
-    isArg (AN _) = True
-    isArg _ = False
-
-    rootOf :: CGraph -> UINode -> UINode
+    rootOf :: StandardEdge e => CGraph n e -> UINode -> UINode
     rootOf gr node
       | VU.null psVert = node
       | otherwise = rootOf gr (VU.head psVert)
@@ -121,9 +132,9 @@ subgraphWindows (graph, pos)
     fr (n, nl) = (fromIntegral n, nl)
     normalisedPos = Map.map (\(x, y) -> (x - minX, y - minY)) (Map.union pos newPos)
 
-    newNodes = zipWith dummyNode [(m + 1) ..] holes
+    newNodes = zipWith dNode [(m + 1) ..] holes
     newPos = Map.fromList (zip (map fromIntegral [(m + 1) ..]) holes)
-    dummyNode n _ = (n, UINodeLabel (DN (DummyNode 1)) Nothing Nothing)
+    dNode n _ = (n, UINodeLabel dummyNode Nothing Nothing)
     m = maximum (nodes graph)
 
     holes :: [(Int, Int)]
@@ -143,7 +154,7 @@ subgraphWindows (graph, pos)
     columns = getColumns (filledGraph, normalisedPos)
 
     maxZCoord = maximum $ map (\(_, nl) -> zOfNode nl) ns
-    zOfNode nl = maybe 0 Ajax.layer (Ajax.nestingFeatures nl)
+    zOfNode nl = maybe 0 layer (nestingFeatures nl)
 
     zLayers :: [(X, [UINode])] -> [(Layer, [(X, [Layer])])]
     zLayers xs = map getLayer (reverse [1 .. maxZCoord])
@@ -152,7 +163,7 @@ subgraphWindows (graph, pos)
           where
             zOfNodes (x, ns1) = (x, map zLayer ns1)
             zLayer n
-              | isJust lu && (zOfNode (fromJust lu)) >= l = l
+              | isJust lu && zOfNode (fromJust lu) >= l = l
               | otherwise = 0
               where
                 lu = Graph.lookupNode n graph
@@ -176,7 +187,7 @@ subgraphWindows (graph, pos)
               | otherwise = minMax layers start (i + 1) Outside
             minMax (l : layers) start i Inside
               | l == z = minMax layers start (i + 1) Inside
-              | otherwise = (start, i - 1) : (minMax layers start (i + 1) Outside)
+              | otherwise = (start, i - 1) : minMax layers start (i + 1) Outside
 
     highestLayer ::
       (X, Y) ->
@@ -199,8 +210,8 @@ subgraphWindows (graph, pos)
     -- Is there at least one neighboring row/column that includes the X/Y coordinate in its span
     overlappedByNeighbouringSpans :: (X, Y) -> Bool -> Map X [(Min, Max)] -> Span
     overlappedByNeighbouringSpans (x, y) isColumn nspans
-      | isColumn = maybe SpanOutside spanPositionColumn (minmax ((goLeft x) ++ (goRight (x + 1))))
-      | otherwise = maybe SpanOutside spanPositionRow (minmax ((goLeft y) ++ (goRight (y + 1))))
+      | isColumn = maybe SpanOutside spanPositionColumn (minmax (goLeft x ++ goRight (x + 1)))
+      | otherwise = maybe SpanOutside spanPositionRow (minmax (goLeft y ++ goRight (y + 1)))
       where
         spanPositionColumn (smin, smax)
           | y == smin = SpanRightBorder
@@ -218,17 +229,12 @@ subgraphWindows (graph, pos)
 
         goLeft p
           | null mm = mm
-          | otherwise = mm ++ (goLeft (p - 1))
+          | otherwise = mm ++ goLeft (p - 1)
           where
             mm = fromMaybe [] (Map.lookup p nspans)
 
         goRight p
           | null mm = mm
-          | otherwise = mm ++ (goRight (p + 1))
+          | otherwise = mm ++ goRight (p + 1)
           where
             mm = fromMaybe [] (Map.lookup p nspans)
-
-type X = Int
-
-type Y = Int
-

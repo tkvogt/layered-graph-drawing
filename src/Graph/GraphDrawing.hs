@@ -1,8 +1,6 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 
@@ -22,44 +20,42 @@ import Data.Vector.Unboxed (Vector)
 import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word32)
 import Debug.Trace
-import Graph.AjaxStructures
+import Graph.CommonGraph
   ( CGraph,
     CGraphL,
     Channel,
     Column,
-    ConnectionNode (ConnectionNode),
     EdgeType (NormalEdge),
     GraphMoveX,
     LayerFeatures (LayerFeatures),
-    SpecialNode (CN),
+    NodeClass (connectionNode, isConnNode, isDummy, isMainArg, isSubLabel, subLabels),
+    StandardEdge (standard),
     UIEdge (..),
     UINode,
     UINodeLabel (..),
-    dummyEdge,
-    isConnLabel,
-    isDummyLabel,
-    isMainArgLabel,
-    myFromJust,
-    myhead,
-    vhead,
-  )
-import qualified Graph.AjaxStructures as Ajax
-import Graph.CommonGraph
-  ( childrenNoVertical,
+    childrenNoVertical,
     childrenSeparating,
     childrenVertical,
-    isCase,
+    dummyEdge,
     isFunction,
+    myFromJust,
+    myhead,
     parentsNoVertical,
     parentsVertical,
     rmdups,
     verticallyConnectedNodes,
+    vhead,
   )
+import qualified Graph.CommonGraph as Common
 import Graph.IntMap (Graph (..), nodes)
 import qualified Graph.IntMap as Graph
 
 -- Also returns a map with Columns to allow navigation with arrows
-layeredGraphAndCols :: Bool -> CGraph -> (CGraphL, (Map.Map GraphMoveX [UINode], Map.Map Int [Column]))
+layeredGraphAndCols ::
+  (NodeClass n, Show n, StandardEdge e, Show e) =>
+  Bool ->
+  CGraph n e ->
+  (CGraphL n e, (Map.Map GraphMoveX [UINode], Map.Map Int [Column]))
 layeredGraphAndCols cross graph = (g, getColumns g)
   where
     g = layeredGraph cross graph
@@ -73,18 +69,22 @@ layeredGraphAndCols cross graph = (g, getColumns g)
 -- 4. Assign y-coordinates to the nodes so that long lines that pass several layers are
 --    as straight as possible
 
-layeredGraph :: VU.Unbox UINode => Bool -> CGraph -> CGraphL
+layeredGraph ::
+  (VU.Unbox UINode, NodeClass n, Show n, StandardEdge e, Show e) =>
+  Bool ->
+  CGraph n e ->
+  CGraphL n e
 layeredGraph cross graph =
   -- Debug.Trace.trace ("layered "++ show graph ++"\n") -- ++ showEdges graph ++ show (Graph.edgeLabels graph)) $ -- ++"\nnewGraph\n" ++ show newGraph ++"\n") $
   newGraph
   where
-    sortLayers (gr, ls) = (gr, (map (sort) ls)) -- makes the dummy vertices appear lower
+    sortLayers (gr, ls) = (gr, map sort ls) -- makes the dummy vertices appear lower
     newGraph =
       ( -- subgraphWindows .
         yCoordinateAssignement
           -- .
           --                     primitiveYCoordinateAssignement .
-          . (crossingReduction 1 cross)
+          . crossingReduction 1 cross
           . sortLayers
           . addConnectionVertices
           . longestPathAlgo
@@ -92,20 +92,20 @@ layeredGraph cross graph =
       )
         graph
 
-fr :: (Int, UINodeLabel) -> (UINode, UINodeLabel)
+fr :: (Int, UINodeLabel a) -> (UINode, UINodeLabel a)
 fr (n, nl) = (fromIntegral n, nl)
 
-graphvizNodes :: (CGraph, Map.Map Int [Column]) -> String
-graphvizNodes (gr, m) = concat (map ((++ "\n") . sh) (I.toList (Graph.nodeLabels gr)))
+graphvizNodes :: (CGraph n e, Map.Map Int [Column]) -> String
+graphvizNodes (gr, m) = concatMap ((++ "\n") . sh) (I.toList (Graph.nodeLabels gr))
   where
     sh (n, _nl) = show n ++ " [ pos = \"" ++ show (myFromJust 499 $ Map.lookup n m) ++ "!\"]"
 
-primitiveYCoordinateAssignement :: (CGraph, [[UINode]]) -> CGraphL
+primitiveYCoordinateAssignement :: (CGraph n e, [[UINode]]) -> CGraphL n e
 primitiveYCoordinateAssignement (graph, layers) =
   --    Debug.Trace.trace ("primitiveY1 "++ show (graph,layers,ns)) $
   (graph, Map.fromList ns)
   where
-    ns :: [(Ajax.Node, (Int, Int))]
+    ns :: [(UINode, (Int, Int))]
     ns = concat $ zipWith (\layer i -> map (incX i) layer) (map oneLayer layers) ([0 ..] :: [Int])
     oneLayer l = zip (iterate incY (0, 0)) l
     incX i ((x, y), n) = (n, (x - i, y))
@@ -155,13 +155,13 @@ positionNode graph (x,y,n) =
 
 -- ^ See "Fast and Simple Horizontal Coordinate Assignment" (Brandes, Köpf)
 
-yCoordinateAssignement :: (CGraph, [[UINode]]) -> CGraphL
+yCoordinateAssignement :: (NodeClass n, StandardEdge e) => (CGraph n e, [[UINode]]) -> CGraphL n e
 yCoordinateAssignement (graph, layers) =
   -- Debug.Trace.trace ("\nyCoordAssign "++ show (layers,graph,pos)) $
   (graph, pos)
   where
     -- newGraph = graph { nodeLabels = I.fromList placedNodes } -- for debugging (Map.fromList edgesToKeep)
-    pos :: Map Ajax.Node (Int, Int)
+    pos :: Map UINode (Int, Int)
     pos = horizontalBalancing lu ld ru rd
     lu = biasedAlignment graph yPos medians (reverse nLayers) (True, True)
     ld = biasedAlignment graph yPos medians (reverse nLayers) (True, False)
@@ -218,6 +218,7 @@ horizontalBalancing lu _ld _ru _rd =
   -- lu -- ld ru rd
   lu
   where
+
 -- average = zipWith f lu ru
 --        f :: (UINode,(X,Y)) -> (UINode,(X,Y)) -> (UINode,(X,Y))
 --        f (n0,(x0,y0)) (n1,(x1,y1)) | n0 /= n1 = error "horizontalBalancing n0 /= n1 "
@@ -238,7 +239,8 @@ data MYN
 type Median = Map UINode MYN
 
 biasedAlignment ::
-  CGraph ->
+  (NodeClass n, StandardEdge e) =>
+  CGraph n e ->
   Map UINode Y ->
   (Median, Median) ->
   [[(UINode, Bool)]] ->
@@ -257,12 +259,12 @@ biasedAlignment graph _ medians layers dir =
       -- Debug.Trace.trace ("\n\nedgesToKeep "++ show dir ++ "\ndigraph G {" ++
       --                   (concat $ map line edgesToKeep) ++"\n"++ placeNodes ++ "\n}") -- \n\nmedians "++ show medians) $
       align graph (map (map fst) layers) edgesToKeep dir
-    edgesToKeep = rmdups $ concat $ map (concat . map resolve . sweep2) (tuples layers)
+    edgesToKeep = rmdups $ concatMap (concatMap resolve . sweep2) (tuples layers)
     _line (from, to) = "\n" ++ show from ++ " -> " ++ show to
-    _placeNodes = concat $ concat $ map (map placeNode) (zipWith (\x -> zip (repeat x)) [1 ..] (map (zip [1 ..]) layers))
+    _placeNodes = concat $ concatMap (map placeNode) (zipWith (\x -> zip (repeat x)) [1 ..] (map (zip [1 ..]) layers))
       where
         placeNode :: (X, (Y, (UINode, Bool))) -> String
-        placeNode (x, (y, (n, _b))) = (show n) ++ " [pos=\"" ++ (show x) ++ "," ++ (show (-y)) ++ "!\"];\n"
+        placeNode (x, (y, (n, _b))) = show n ++ " [pos=\"" ++ show x ++ "," ++ show (-y) ++ "!\"];\n"
     resolve :: [(MYN, MYN)] -> [(UINode, UINode)]
     resolve ts =
       -- Debug.Trace.trace ("\nresolve "++ show (ts, res))
@@ -298,7 +300,7 @@ biasedAlignment graph _ medians layers dir =
         f y (n, b)
           | isJust lu && isValidEdge -- Debug.Trace.trace ("sweep2lu0 "++ show lu) $
             =
-            Just (Single (y, (n, b)), (myFromJust 501 lu))
+            Just (Single (y, (n, b)), myFromJust 501 lu)
           | otherwise -- Debug.Trace.trace ("sweep2lu1 "++ show (n,lu))
             =
             Nothing
@@ -307,13 +309,13 @@ biasedAlignment graph _ medians layers dir =
             luBack = Map.lookup (fst $ snd $ getYN left $ myFromJust 502 lu) (fst medians)
             isValidEdge =
               -- Debug.Trace.trace ("n,lu,luBack "++ show (n,lu,luBack)) $
-              isJust luBack && n == (fst $ snd $ getYN left $ myFromJust 503 luBack)
+              isJust luBack && n == fst (snd $ getYN left $ myFromJust 503 luBack)
 
 toNode :: ((a1, (a2, b1)), (a3, (b2, b3))) -> (a2, b2)
 toNode ((_, (n0, _)), (_, (n1, _))) = (n0, n1)
 
 tuples :: [a] -> [(a, a)]
-tuples (x : y : xs) = (x, y) : (tuples (y : xs))
+tuples (x : y : xs) = (x, y) : tuples (y : xs)
 tuples _ = []
 
 type Insp = (Map Int (MYN, MYN), Map Int (MYN, MYN))
@@ -337,7 +339,8 @@ type Insp = (Map Int (MYN, MYN), Map Int (MYN, MYN))
 --   y-position) and an end node. A start node means adding an edge when its source or target node appears in one of
 --   the two layers, and the edge disappears when both its nodes have been swept over.
 sweepForIndependentEdgeLists ::
-  CGraph ->
+  (NodeClass n, StandardEdge e) =>
+  CGraph n e ->
   (Median, Median) ->
   Set (UINode, UINode) ->
   (Bool, Bool) ->
@@ -397,7 +400,7 @@ sweepForIndependentEdgeLists graph medians allowedEdges dir inspectionEdges (y0,
       | null layer1 = []
       | otherwise = tail layer1
     hl1 = fst (myhead 62 layer1)
-    verticalNode = VU.elem (fst (myhead 63 tl1)) (Graph.adjacentNodesByAttr graph True hl1 (Graph.Edge8 Ajax.vertBit))
+    verticalNode = VU.elem (fst (myhead 63 tl1)) (Graph.adjacentNodesByAttr graph True hl1 (Graph.Edge8 Common.vertBit))
     resEdges = myNub ((Map.elems newInsFrom) ++ (Map.elems newInsTo) ++ (Set.toList missingEdges))
 
     edgeFrom :: Maybe MYN
@@ -640,7 +643,7 @@ col i n = (show n) ++ " " ++ (c (i `mod` 5)) ++ "\n"
 -- Similar to Brandes-Köpf but without arrays and no placement of blocks
 -- The basic algorithm is longest path.
 -- debugging can be done with graphviz, also uncomment line 533 in longestPath | otherwise
-align :: CGraph -> [[UINode]] -> [(UINode, UINode)] -> (Bool, Bool) -> Map UINode (Int, Int)
+align :: StandardEdge e => CGraph n e -> [[UINode]] -> [(UINode, UINode)] -> (Bool, Bool) -> Map UINode (Int, Int)
 align graph layers edges (_alignLeft, _up) =
   {-Debug.Trace.trace ("\nalign\ndigraph{\n"++ (concat $ map ranksame layers)
                       ++ (concat (map ((++ "\n") . (intercalate " -> ") . (map show)) layers))
@@ -858,7 +861,7 @@ leftToRight :: Dir -> Bool
 leftToRight LeftToRight = True
 leftToRight RightToLeft = False
 
-longestinfrequentPaths :: CGraph -> [[UINode]] -> Vector Int
+longestinfrequentPaths :: StandardEdge e => NodeClass n => CGraph n e -> [[UINode]] -> Vector Int
 longestinfrequentPaths _ [] = VU.empty
 longestinfrequentPaths _ [_] = VU.empty
 longestinfrequentPaths g (l0 : l1 : layers)
@@ -867,7 +870,7 @@ longestinfrequentPaths g (l0 : l1 : layers)
   where
     r = map (liPaths g (l1 : layers) []) (startNodes g l0 l1)
 
-startNodes :: CGraph -> [Word32] -> [Word32] -> [Word32]
+startNodes :: StandardEdge e => CGraph n e -> [Word32] -> [Word32] -> [Word32]
 startNodes g l0 l1 = catMaybes $ map (nodeWithChildInLayer l1) l0
   where
     nodeWithChildInLayer layer1 node
@@ -878,13 +881,14 @@ startNodes g l0 l1 = catMaybes $ map (nodeWithChildInLayer l1) l0
         Nothing
       | otherwise = Just node
 
-liPaths :: CGraph -> [[UINode]] -> [UINode] -> UINode -> Vector Int
+liPaths :: StandardEdge e => NodeClass n => CGraph n e -> [[UINode]] -> [UINode] -> UINode -> Vector Int
 liPaths _ [] ns node = VU.fromList (map fromIntegral (node : ns))
 liPaths g (l0 : layers) ns node = VU.concatMap (liPaths g layers (node : ns)) cs
   where
     cs =
       VU.filter
-        (\x -> (maybe False (not . isDummyLabel) (Graph.lookupNode x g)) && elem x l0)
+        --        (\x -> (maybe False (not . isDummyLabel) (Graph.lookupNode x g)) && elem x l0)
+        (\x -> not (isDummy g x) && elem x l0)
         (childrenNoVertical g node)
 
 myNub :: Ord a => [a] -> [a]
@@ -903,7 +907,7 @@ type UnconnectedChildren = [UINode]
 -- This algorithm is a little bit more complicated because we can connect nodes "vertically",
 -- so that they are guaranteed to be all in one vertical layer
 -- All nodes before this vertical layer have to be placed in layers before we can proceed
-longestPathAlgo :: CGraph -> (CGraph, [[UINode]])
+longestPathAlgo :: (NodeClass n, StandardEdge e) => CGraph n e -> (CGraph n e, [[UINode]])
 longestPathAlgo g =
   -- Debug.Trace.trace ("\nlongestPathAlgo\n" ++ show (g, newLayers, moveFinalNodesLeftToVert newLayers)) $
   --  Debug.Trace.trace ("\nlongestPathAlgo " ++ show g ++
@@ -1048,24 +1052,24 @@ longestPathAlgo g =
 -- Some functions don't have an input (e.g. True).
 -- But a function without input can only appear directly after a case node
 -- That's why we insert a connection node between this case node and the function node
-addMissingInputNodes :: CGraph -> CGraph
+addMissingInputNodes :: (NodeClass n, Show n, StandardEdge e) => CGraph n e -> CGraph n e
 addMissingInputNodes graph =
   -- Debug.Trace.trace ("\naddConnectionNodes"++ show (foldl addConnNode graph (map fromIntegral (nodes graph)))) $
   foldl addConnNode graph (map fromIntegral (nodes graph))
   where
-    addConnNode :: CGraph -> UINode -> CGraph
+    addConnNode :: (NodeClass n, Show n, StandardEdge e) => CGraph n e -> UINode -> CGraph n e
     addConnNode g n
       | VU.null ps = g
-      | isFunction graph n
-          && isCase graph (vhead 501 ps) -- Debug.Trace.trace ("caseconn"++ show (n, VU.head ps)) $
-        =
+      | isFunction graph n =
+        --        && isCase graph (vhead 501 ps) -- Debug.Trace.trace ("caseconn"++ show (n, VU.head ps)) $
+
         insertConnNode g n (vhead 502 ps) Nothing 0
       | otherwise = g
       where
         ps = parentsNoVertical graph n
 
 -- | partition nodes into non-vertically connected nodes and vertically connected nodes
-partitionNodes :: CGraph -> VU.Vector UINode -> (VU.Vector UINode, VU.Vector UINode)
+partitionNodes :: StandardEdge e => CGraph n e -> VU.Vector UINode -> (VU.Vector UINode, VU.Vector UINode)
 partitionNodes g ns =
   VU.partition
     ( \n ->
@@ -1077,12 +1081,12 @@ partitionNodes g ns =
 -- coffmanGrahamAlgo :: Graph -> [[Int]]
 -- coffmanGrahamAlgo g =
 
-addConnectionVertices :: (CGraph, [[UINode]]) -> (CGraph, [[UINode]])
+addConnectionVertices :: (NodeClass n, Show n, StandardEdge e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
 addConnectionVertices (g, ls) =
   -- Debug.Trace.trace ("acv"++ show (ls, addConnectionVs (g,ls))) $
   addConnectionVs (g, ls)
 
-addConnectionVs :: (CGraph, [[UINode]]) -> (CGraph, [[UINode]])
+addConnectionVs :: (NodeClass n, Show n, StandardEdge e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
 addConnectionVs (graph, []) = (graph, [])
 addConnectionVs (graph, [l0]) = (graph, [l0])
 addConnectionVs (graph, (l0 : l1 : layers)) = (fst adv, l0 : (snd adv))
@@ -1101,16 +1105,16 @@ addConnectionVs (graph, (l0 : l1 : layers)) = (fst adv, l0 : (snd adv))
         ps = parentsNoVertical graph n
         isNotInLayerL1 = not . (\x -> elem x l1)
         chans = map (\e -> maybe (Nothing, 0) f e) edges
-        f x = (Ajax.channelNrIn (myhead 71 x), Ajax.channelNrOut (myhead 72 x))
+        f x = (Common.channelNrIn (myhead 71 x), Common.channelNrOut (myhead 72 x))
         edges = zipWith lue notInLayerL1Parents (repeat n)
         lue x y = Graph.lookupEdge (x, y) graph
 
-    dummyNodeEdge :: (CGraph, [UINode]) -> (UINode, (UINode, UINode, (Maybe Int, Int))) -> (CGraph, [UINode])
+    dummyNodeEdge :: (NodeClass n, Show n, StandardEdge e) => (CGraph n e, [UINode]) -> (UINode, (UINode, UINode, (Maybe Int, Int))) -> (CGraph n e, [UINode])
     dummyNodeEdge (g, l) (v, (from, to, (chanIn, chanOut))) =
       -- Debug.Trace.trace ("dummyNodeEdge"++ show (v,(from,to,chan)))
       (insertConnNode g from to chanIn chanOut, v : l)
 
-insertConnNode :: CGraph -> UINode -> UINode -> Maybe Channel -> Channel -> CGraph
+insertConnNode :: (NodeClass n, Show n, StandardEdge e) => CGraph n e -> UINode -> UINode -> Maybe Channel -> Channel -> CGraph n e
 insertConnNode graph from to chanIn chanOut =
   -- Debug.Trace.trace ("dummyNodeEdge"++ show (to, fromIntegral (m+1), chanIn, 0, chanOut, fromIntegral (m+1), from))
   Graph.deleteEdge (Just True) (to, from) $
@@ -1123,18 +1127,18 @@ insertConnNode graph from to chanIn chanOut =
   where
     m = maximum (nodes graph)
     nest
-      | isJust lu = Ajax.nestingFeatures (myFromJust 516 lu)
+      | isJust lu = Common.nestingFeatures (myFromJust 516 lu)
       | otherwise = Nothing
     lu = Graph.lookupNode from graph
-    depth = maybe 1 Ajax.layer nest
-    dmmyEdge chIn chOut = [UIEdge "standardEdge" Nothing Nothing Nothing Nothing Nothing "" chIn chOut NormalEdge]
+    depth = maybe 1 Common.layer nest
+    dmmyEdge chIn chOut = [UIEdge standard chIn chOut NormalEdge]
 
 -- UIEdge 2 1 "" Curly "#ff5863" "" i False False]
 
-dmmy :: Int -> UINodeLabel
-dmmy depth = UINodeLabel (CN (ConnectionNode 1)) (Just (LayerFeatures depth Nothing)) Nothing
+dmmy :: NodeClass n => Int -> UINodeLabel n
+dmmy depth = UINodeLabel connectionNode (Just (LayerFeatures depth Nothing)) Nothing
 
-crossingReduction :: Int -> Bool -> (CGraph, [[UINode]]) -> (CGraph, [[UINode]])
+crossingReduction :: (NodeClass n, Show n, StandardEdge e, Show e) => Int -> Bool -> (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
 crossingReduction i longestP (graph, layers)
   | i > 0 -- Debug.Trace.trace ("crossingReduction\nlayers    " ++ show layers ++
   --                   "\nc         "++ show c ++
@@ -1163,7 +1167,7 @@ crossingReduction i longestP (graph, layers)
         (map fromIntegral)
         (crossR graph LeftToRight c priorityNodes longestP)
 
-crossR :: CGraph -> Dir -> [[Int]] -> [Int] -> Bool -> [[Int]]
+crossR :: (NodeClass n, Show n, StandardEdge e, Show e) => CGraph n e -> Dir -> [[Int]] -> [Int] -> Bool -> [[Int]]
 crossR _ _ [] _ _ = []
 crossR g dir (l0 : l1 : layers) (n0 : n1 : ns) longestP
   | ( crossings l0Enum bEnum
@@ -1205,12 +1209,12 @@ crossR g dir (l0 : l1 : layers) (n0 : n1 : ns) longestP
     --    mEnum  = IM.fromList (zip m  [0..])
 
     lu n = Graph.lookupNode (fromIntegral n) g
-    vertNum n = maybe Nothing Ajax.verticalNumber (lu n)
+    vertNum n = maybe Nothing Common.verticalNumber (lu n)
 crossR _ _ l _ _ = l
 
 -- arrange vertical nodes directly below each other,
 -- returns Nothing if there are no vertical nodes in this layer
-lv :: CGraph -> [Int] -> [(Int, Bool)]
+lv :: StandardEdge e => CGraph n e -> [Int] -> [(Int, Bool)]
 lv _ [] = []
 lv g (l : ls) =
   -- Debug.Trace.trace ("vertConnected "++ show ((l,ls,ls \\ vertConnected),(goUp ps),l,(goDown cs))) $
@@ -1236,7 +1240,7 @@ lv g (l : ls) =
       | otherwise = (fromIntegral (head n)) : (goDown (map fromIntegral $ VU.toList $ childrenVertical g (fromIntegral (head n))))
 
 -- type YNode = (YPos,Channel,UINode,IsDummy)
-edgesEnum :: IM.IntMap UINode -> IM.IntMap UINode -> CGraph -> Dir -> [UINode] -> [(YNode, YNode)]
+edgesEnum :: (NodeClass n, StandardEdge e, Show e) => IM.IntMap UINode -> IM.IntMap UINode -> CGraph n e -> Dir -> [UINode] -> [(YNode, YNode)]
 edgesEnum en0 en1 gr dir l0 = catMaybes edges
   where
     edges :: [(Maybe (YNode, YNode))]
@@ -1246,21 +1250,21 @@ edgesEnum en0 en1 gr dir l0 = catMaybes edges
       | isNothing s || isNothing t = Nothing
       | otherwise =
         Just
-          ( (myFromJust 517 s, chanNr, src, isDummyNode gr src),
-            (myFromJust 518 t, 0, tgt, isDummyNode gr tgt)
+          ( (myFromJust 517 s, chanNr, src, isDummy gr src),
+            (myFromJust 518 t, 0, tgt, isDummy gr tgt)
           )
       where
         s = IM.lookup (fromIntegral src) e0
         t = IM.lookup (fromIntegral tgt) e1
         chanNr
           | isJust lu && null (myFromJust 519 lu) = 0
-          | isJust lu = Ajax.channelNrOut (myhead 73 (myFromJust 520 lu))
+          | isJust lu = Common.channelNrOut (myhead 73 (myFromJust 520 lu))
           | otherwise = 0
         lu = Graph.lookupEdge (tgt, src) gr
 
-    edgesOfLayer :: CGraph -> [UINode] -> [(UINode, UINode)]
+    edgesOfLayer :: StandardEdge e => CGraph n e -> [UINode] -> [(UINode, UINode)]
     edgesOfLayer g l = concat (map (adjEdges g) l)
-    adjEdges :: CGraph -> Word32 -> [(UINode, UINode)]
+    adjEdges :: StandardEdge e => CGraph n e -> Word32 -> [(UINode, UINode)]
     adjEdges g n
       | leftToRight dir = map (\x -> (n, x)) (VU.toList (parentsNoVertical g n))
       | otherwise = map (\x -> (n, x)) (VU.toList (childrenNoVertical g n))
@@ -1268,18 +1272,14 @@ edgesEnum en0 en1 gr dir l0 = catMaybes edges
 -- type YPos = Int
 -- type YNode = (YPos,Channel,UINode,IsDummy)
 
-isDummyNode :: CGraph -> UINode -> Bool
-isDummyNode g node = maybe False isDummyLabel (Graph.lookupNode node g)
-
-isConnNode :: CGraph -> UINode -> Bool
-isConnNode g node = maybe False isConnLabel (Graph.lookupNode node g)
-
-isNotMainFunctionArg :: CGraph -> UINode -> Bool
-isNotMainFunctionArg g node = not (maybe False isMainArgLabel (Graph.lookupNode node g))
+isNotMainFunctionArg :: NodeClass n => CGraph n e -> UINode -> Bool
+isNotMainFunctionArg g node =
+  -- not (maybe False isMainArg (Graph.lookupNode node g))
+  not (isMainArg g node)
 
 -- Assign every node in l1 a number thats the barycenter of its neighbours in l0, then sort.
 -- If the node is marked as a vertical node with a number, this number has precedence in sorting
-barycenter :: CGraph -> Dir -> [Int] -> [Int] -> Int -> [Int]
+barycenter :: (NodeClass n, Show n, StandardEdge e, Show e) => CGraph n e -> Dir -> [Int] -> [Int] -> Int -> [Int]
 barycenter g dir l0 l1 _ =
   -- Debug.Trace.trace ("bary " ++ show (map bc l1, sortOn snd (map bc l1))) $
   map fst (sortOn snd (map bc l1))
@@ -1297,42 +1297,42 @@ barycenter g dir l0 l1 _ =
         nodeWeight LeftToRight
           | isJust vertNum -- Debug.Trace.trace ("bvert lr "++ show vertNum)
             =
-            (fromIntegral (myFromJust 521 vertNum)) + (if VU.null cs then 0 else (subTypePos (VU.head cs)) * 10000)
+            (fromIntegral (myFromJust 521 vertNum)) + (if VU.null cs then 0 else (subPos (VU.head cs)) * 10000)
           | lenCs == 0 -- Debug.Trace.trace "bry -1"
             =
             (-1)
           --                | node == prioNode = -2
           | otherwise -- Debug.Trace.trace ("bsum lr "++ show (VU.map xpos cs)) $
             =
-            ((VU.sum (VU.map xpos cs)) / (fromIntegral lenCs)) + (if VU.null cs then 0 else (subTypePos (VU.head cs)) * 10000)
+            ((VU.sum (VU.map xpos cs)) / (fromIntegral lenCs)) + (if VU.null cs then 0 else (subPos (VU.head cs)) * 10000)
         nodeWeight RightToLeft
           | isJust vertNum -- Debug.Trace.trace ("bvert rl "++ show vertNum)
             =
-            (fromIntegral (myFromJust 522 vertNum)) + (if VU.null cs then 0 else (subTypePos (VU.head cs)) * 10000)
+            (fromIntegral (myFromJust 522 vertNum)) + (if VU.null cs then 0 else (subPos (VU.head cs)) * 10000)
           | lenPs == 0 -- Debug.Trace.trace "bry -1"
             =
             (-1)
           --                | node == prioNode = -2
           | otherwise -- Debug.Trace.trace ("bsum rl "++ show (VU.map xpos ps)) $
             =
-            ((VU.sum (VU.map xpos ps)) / (fromIntegral lenPs)) + (if VU.null cs then 0 else (subTypePos (VU.head cs)) * 10000)
+            ((VU.sum (VU.map xpos ps)) / (fromIntegral lenPs)) + (if VU.null cs then 0 else (subPos (VU.head cs)) * 10000)
 
         lu = Graph.lookupNode (fromIntegral node) g
-        vertNum = maybe Nothing Ajax.verticalNumber lu
+        vertNum = maybe Nothing Common.verticalNumber lu
         xpos :: Int -> Double
         xpos c =
-          -- Debug.Trace.trace (show (c, l0,maybe 0 fromIntegral (elemIndex c l0), subTypePos c)) $
+          -- Debug.Trace.trace (show (c, l0,maybe 0 fromIntegral (elemIndex c l0), subPos c)) $
           (maybe 0 fromIntegral (elemIndex c l0))
 
-        subTypePos :: Int -> Double
-        subTypePos c =
+        subPos :: Int -> Double
+        subPos c =
           -- Debug.Trace.trace (show channel ++ " : " ++ show channels) $
           (fromIntegral channel) / (fromIntegral channels)
           where
-            channel = maybe 0 Ajax.channelNrOut edgeLabel
+            channel = maybe 0 Common.channelNrOut edgeLabel
             channels = maybe 1 nrTypes (Graph.lookupNode (fromIntegral c) g)
             nrTypes x
-              | Ajax.isTyLabel x = length (Ajax.tn (Ajax.uinode x))
+              | isSubLabel x = subLabels (Common.uinode x) -- length (Ajax.sn (Ajax.uinode x))
               | otherwise = 1
             edgeLabel
               | isNothing (Graph.lookupEdge dEdge g) = Nothing
@@ -1341,7 +1341,7 @@ barycenter g dir l0 l1 _ =
             dEdge = (fromIntegral node, fromIntegral c)
 
 -- Assign every node in l0 a number thats the median of its neighbours in l1, then sort
-median :: CGraph -> [Int] -> [Int] -> [Int]
+median :: StandardEdge e => CGraph n e -> [Int] -> [Int] -> [Int]
 median g l0 l1 = map fst $ sortOn snd $ map bc l0
   where
     bc :: Int -> (Int, Int)
@@ -1410,14 +1410,15 @@ mergeSort (xs, _) =
 -- https://hackage.haskell.org/package/splaytree
 -- https://hackage.haskell.org/package/TreeStructures-0.0.1/docs/Data-Tree-Splay.html
 
-fromAdj :: Map Word32 nl -> [(Word32, [Word32], [UIEdge])] -> Graph nl [UIEdge]
+fromAdj :: StandardEdge e => Map Word32 nl -> [(Word32, [Word32], [UIEdge e])] -> Graph nl [UIEdge e]
 fromAdj nodesMap adj = foldl (newNodes nodesMap) Graph.empty adj
   where
     newNodes :: -- (Ord n, VU.Unbox n) =>
+      StandardEdge e =>
       Map Word32 nl ->
-      Graph nl [UIEdge] ->
-      (Word32, [Word32], [UIEdge]) ->
-      Graph nl [UIEdge]
+      Graph nl [UIEdge e] ->
+      (Word32, [Word32], [UIEdge e]) ->
+      Graph nl [UIEdge e]
     newNodes nm g (n, ns, eLabel) =
       Graph.insertEdges (Just True) edges $
         maybe id (Graph.insertNode (fromIntegral n)) (Map.lookup n nm) $
@@ -1432,7 +1433,7 @@ fromAdj nodesMap adj = foldl (newNodes nodesMap) Graph.empty adj
 ------------------------------------------------------------------------------------------------------------------------------
 
 -- | To be able to jump vertically between nodes in an interactive ui
-getColumns :: CGraphL -> (Map X [UINode], Map.Map Int [Column])
+getColumns :: StandardEdge e => CGraphL n e -> (Map X [UINode], Map.Map Int [Column])
 getColumns (gr, m) = (Map.fromList cols, Map.fromList (zip [0 ..] (divideTables cols)))
   where
     cols =
@@ -1465,7 +1466,7 @@ getColumns (gr, m) = (Map.fromList cols, Map.fromList (zip [0 ..] (divideTables 
         cs n = VU.length (childrenSeparating gr n) > 0
 
 -- | To be able to jump horizontally between nodes in an interactive ui
-getRows :: CGraphL -> Map Y [UINode]
+getRows :: CGraphL n e -> Map Y [UINode]
 getRows (gr, m) =
   Map.fromList $
     map

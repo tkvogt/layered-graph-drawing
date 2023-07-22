@@ -12,16 +12,15 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (fromJust, fromMaybe, isJust)
 import qualified Data.Vector.Unboxed as VU
-import Debug.Trace
+import Debug.Trace ( trace )
 import Graph.CommonGraph
   ( CGraph,
     CGraphL,
     Column,
     LayerFeatures (..),
-    NodeClass (dummyNode, isArgLabel),
-    StandardEdge,
+    NodeClass (dummyNode, isArgLabel, updateLayer),
+    EdgeClass,
     UINode,
-    UINodeLabel (..),
     bb,
     childrenSeparating,
     layer,
@@ -58,7 +57,7 @@ type Min = Int
 
 type Max = Int
 
-subgraphWindows :: StandardEdge e => (NodeClass n, Show n, VU.Unbox UINode) => CGraphL n e -> CGraphL n e
+subgraphWindows :: (EdgeClass e, NodeClass n, Show n, VU.Unbox UINode) => CGraphL n e -> CGraphL n e
 subgraphWindows (graph, pos)
   | null ns = (graph, pos)
   | otherwise -- Debug.Trace.trace ("subgraphWindows "++ show (graph,pos,newGraph,normalisedPos) ++"\n") -- ++ -- show newGraph ++"\n"++
@@ -71,26 +70,28 @@ subgraphWindows (graph, pos)
         changeNode
         filledGraph
 
-    changeNode n (UINodeLabel node Nothing vn)
-      | isArgLabel node = UINodeLabel node (changeStyle l defaultFeatures) vn
-      | otherwise = UINodeLabel node (changeStyle l defaultFeatures) vn
-      where
-        l = highestLayer xy (spans zRows) (spans zColumns)
-        xy = fromMaybe (0, 0) (Map.lookup (fromIntegral n) normalisedPos)
-    changeNode n (UINodeLabel node nestingFeats vn)
-      | isArgLabel node -- Debug.Trace.trace ("changeNode isArg" ++ show (l,xy,xy2,nestingFeats,changeStyle l nestingFeats)) $
-        =
-        UINodeLabel node (changeStyle l (Just ((fromJust nestingFeats) {layer = fst l}))) vn
-      | otherwise -- Debug.Trace.trace ("changeNode other" ++ show (l,xy)) $
-        =
-        UINodeLabel node (changeStyle l nestingFeats) vn
+    changeNode :: NodeClass n => I.Key -> n -> n
+    changeNode n node = changeLayer nf n node
+      where nf = nestingFeatures node
+
+    changeLayer :: NodeClass n => Maybe LayerFeatures -> I.Key -> n -> n
+    changeLayer Nothing n node
+      | isArgLabel node = updateLayer (changeStyle l defaultFeatures) node
+      | otherwise =       updateLayer (changeStyle l defaultFeatures) node
       where
         l = highestLayer xy (spans zRows) (spans zColumns)
         xy = fromMaybe (0, 0) (Map.lookup (fromIntegral n) normalisedPos)
         _xy2 = fromMaybe (0, 0) (Map.lookup (fromIntegral root) normalisedPos)
         root = rootOf graph (fromIntegral n)
 
-    rootOf :: StandardEdge e => CGraph n e -> UINode -> UINode
+    changeLayer nestingFeats n node
+      | isArgLabel node = updateLayer (changeStyle l (Just ((fromJust nestingFeats) {layer = fst l}))) node
+      | otherwise = updateLayer (changeStyle l nestingFeats) node
+      where
+        l = highestLayer xy (spans zRows) (spans zColumns)
+        xy = fromMaybe (0, 0) (Map.lookup (fromIntegral n) normalisedPos)
+
+    rootOf :: EdgeClass e => CGraph n e -> UINode -> UINode
     rootOf gr node
       | VU.null psVert = node
       | otherwise = rootOf gr (VU.head psVert)
@@ -134,7 +135,7 @@ subgraphWindows (graph, pos)
 
     newNodes = zipWith dNode [(m + 1) ..] holes
     newPos = Map.fromList (zip (map fromIntegral [(m + 1) ..]) holes)
-    dNode n _ = (n, UINodeLabel dummyNode Nothing Nothing)
+    dNode n _ = (n, dummyNode 1)
     m = maximum (nodes graph)
 
     holes :: [(Int, Int)]

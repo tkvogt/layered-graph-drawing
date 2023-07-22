@@ -17,13 +17,13 @@ import Debug.Trace (trace)
 --import Diagrams.Backend.SVG.CmdLine (B, mainWith)
 --import Diagrams.Prelude
 import GHC.Generics
-import Graph.CommonGraph (CGraph, CGraphL, EdgeType (..), NodeClass (..), StandardEdge (..), UIEdge (..), UINode, UINodeLabel (..))
+import Graph.CommonGraph (Channel, CGraph, CGraphL, EdgeType (..), NodeClass (..), EdgeClass (..), UINode)
 import Graph.GraphDrawing (fromAdj, layeredGraph)
 import qualified Graph.IntMap as Graph
 --import Graphics.SVGFonts (textSVG)
 
 -- several papers use this graph
-testGraph :: CGraph (SpecialNode [Text]) UIEdgeLabel
+testGraph :: CGraph UINodeLabel UIEdgeLabel
 testGraph = fromAdj (extractNodes gr) gr
   where
     gr =
@@ -58,7 +58,7 @@ testGraph = fromAdj (extractNodes gr) gr
         (28, [7], dEdge)
       ]
 
-testGraph2 :: CGraph (SpecialNode [Text]) UIEdgeLabel
+testGraph2 :: CGraph UINodeLabel UIEdgeLabel
 testGraph2 = fromAdj (extractNodes gr) gr
   where
     gr =
@@ -99,7 +99,7 @@ testGraph2 = fromAdj (extractNodes gr) gr
 -- Should be displayed vertical as options
 -- Vertical lines between the function nodes give an order. If the graph grows the vertical nodes should
 -- still be in one column
-optionsGraph :: CGraph (SpecialNode [Text]) UIEdgeLabel
+optionsGraph :: CGraph UINodeLabel UIEdgeLabel
 optionsGraph = fromAdj (extractNodes gr) gr
   where
     gr =
@@ -114,16 +114,16 @@ optionsGraph = fromAdj (extractNodes gr) gr
         (5, [8], vdummyEdge)
       ]
 
-dEdge :: [UIEdge UIEdgeLabel]
-dEdge = [UIEdge standard Nothing 0 NormalEdge]
+dEdge :: [UIEdgeLabel]
+dEdge = [standard NormalEdge]
 
 -- [UIEdge 2 1 "" Curly "#ff5863" "" 0 False False]
 
-vdummyEdge :: [UIEdge UIEdgeLabel]
-vdummyEdge = [UIEdge standard Nothing 0 VirtualHorEdge]
+vdummyEdge :: [UIEdgeLabel]
+vdummyEdge = [standard VirtualHorEdge]
 
 -- [UIEdge 2 1 "" Curly "#ff5863" "" 0 True False]
-extractNodes :: [(Word32, [Word32], [UIEdge a])] -> Map.Map Word32 (UINodeLabel (SpecialNode [Text]))
+extractNodes :: EdgeClass e => [(Word32, [Word32], [e])] -> Map.Map Word32 UINodeLabel
 extractNodes adj = Map.fromList (map labelNode nodes)
   where
     nodes = (map sel1 adj) ++ (concat (map sel2 adj))
@@ -139,14 +139,18 @@ extractNodes adj = Map.fromList (map labelNode nodes)
                   ""
               )
           )
-          Nothing
-          Nothing
       )
 
 main :: IO ()
 main = return () -- mainWith (visualGraph (layeredGraph True testGraph) :: Diagram B)
 
 ------------------------------------------------------------------------------------------------
+
+data UINodeLabel = UINodeLabel
+  {
+    uinode :: SpecialNode [Text]
+  }
+  deriving (Show)
 
 data UIEdgeLabel = UIEdgeLabel
   { lineClass :: Text,
@@ -155,7 +159,13 @@ data UIEdgeLabel = UIEdgeLabel
     dashArray :: Maybe Text,
     lineColor :: Maybe Text,
     lineName :: Text,
-    lineType :: Maybe LineType
+    lineType :: Maybe LineType,
+    channelNrIn :: Maybe Channel, -- arg nr x of constructor node
+
+    -- | Me, Colleague-Name to remeber past decisions, but only people you know,
+    -- or company, group
+    channelNrOut :: Channel, -- function output is connected with input nr x of type node
+    edgeType :: EdgeType
   }
   deriving (Show)
 
@@ -167,7 +177,6 @@ data LineType
 
 data SpecialNode a
   = FuN FunctionNode
-  | Case CaseNode
   | SubN [a]
   | DN DummyNode
   | CN ConnectionNode
@@ -185,12 +194,6 @@ data FunctionNode = FunctionNode
   }
   deriving (Eq, Ord, Generic, Show)
 
-data CaseNode = CaseNode
-  { casePackage :: Text,
-    caseModule :: Text
-  }
-  deriving (Eq, Ord, Generic, Show)
-
 data ArgNode = ArgNode
   { refFunctionUnique :: Text,
     argName :: Text,
@@ -201,45 +204,50 @@ data ArgNode = ArgNode
   }
   deriving (Eq, Ord, Show, Generic)
 
-instance NodeClass (SpecialNode [Text]) where
-  isDummy gr n = maybe False isDummyLabel (Graph.lookupNode n gr)
+instance NodeClass UINodeLabel where
+  isDummy gr n = False -- maybe False isDummyLabel (Graph.lookupNode n gr)
   isConnNode gr n = maybe False isConnLabel (Graph.lookupNode n gr)
   isFunction gr n = maybe False isFuncLabel (Graph.lookupNode n gr)
-  isSubLabel (UINodeLabel (SubN _) _ _) = True
-  isSubLabel _ = False
-  connectionNode = CN (ConnectionNode 1)
-  isArgLabel (AN _) = True
-  isArgLabel _ = False
-
   isMainArg gr n = False -- maybe False isArgLabel (Graph.lookupNode n gr)
-  subLabels (SubN as) = length as
-  dummyNode = DN (DummyNode 1)
+  isSubLabel (UINodeLabel (SubN _)) = True
+  isSubLabel _ = False
+  isArgLabel (UINodeLabel (AN _)) = True
+  isArgLabel _ = False
+  subLabels (UINodeLabel (SubN as)) = length as
+  connectionNode = UINodeLabel (CN (ConnectionNode 1))
+  dummyNode x = UINodeLabel (DN (DummyNode x))
+  nestingFeatures _ = Nothing
+  updateLayer _ n = n
+  verticalNumber _ = Nothing
 
+instance EdgeClass UIEdgeLabel where
+  dummyEdge chIn chOut = UIEdgeLabel "" Nothing Nothing Nothing Nothing "" Nothing chIn chOut NormalEdge
+  standard edgeType =    UIEdgeLabel "" Nothing Nothing Nothing Nothing "" Nothing Nothing 0 edgeType
+  edgeType (UIEdgeLabel _ _ _ _ _ _ _ _ _ e) = e
+  channelNrIn (UIEdgeLabel _ _ _ _ _ _ _ channelIn channelOut _) = channelIn
+  channelNrOut (UIEdgeLabel _ _ _ _ _ _ _ channelIn channelOut _) = channelOut
 
-instance StandardEdge UIEdgeLabel where
-  standard = UIEdgeLabel "" Nothing Nothing Nothing Nothing "" Nothing
-
-isDummyLabel :: UINodeLabel (SpecialNode [Text]) -> Bool
-isDummyLabel (UINodeLabel (DN _) _ _) = True
+isDummyLabel :: UINodeLabel -> Bool
+isDummyLabel (UINodeLabel (DN _)) = True
 isDummyLabel _ = False
 
-isConnLabel :: UINodeLabel (SpecialNode [Text]) -> Bool
-isConnLabel (UINodeLabel (CN _) _ _) = True
+isConnLabel :: UINodeLabel -> Bool
+isConnLabel (UINodeLabel (CN _)) = True
 isConnLabel _ = False
 
-isFuncLabel :: UINodeLabel (SpecialNode [Text]) -> Bool
-isFuncLabel (UINodeLabel (FuN _) _ _) = True
+isFuncLabel :: UINodeLabel -> Bool
+isFuncLabel (UINodeLabel (FuN _)) = True
 isFuncLabel _ = False
 
-isArgLabel :: UINodeLabel (SpecialNode [Text]) -> Bool
-isArgLabel (UINodeLabel (AN _) _ _) = True
+isArgLabel :: UINodeLabel -> Bool
+isArgLabel (UINodeLabel (AN _)) = True
 isArgLabel _ = False
 
 -----------------------------------------------------------------------------------------------
 
 -- Using diagrams to visualise the graph (this is commented out, so that you only need the quite big diagrams dependency when using this for debugging)
 {-
-visualGraph :: (NodeClass n, StandardEdge e) => CGraphL n e -> Diagram B
+visualGraph :: (NodeClass n, EdgeClass e) => CGraphL n e -> Diagram B
 visualGraph (g, nPositions) =
   Debug.Trace.trace (show (length shortEs) ++ " : " ++ show (length longEs) ++ show (Graph.nodes testGraph, Graph.nodes g)) $
     position graphNodes # connections shortEs

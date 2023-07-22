@@ -8,14 +8,15 @@
 module Graph.CommonGraph where
 
 import Data.Aeson (FromJSON (..), ToJSON (..))
+import qualified Data.IntMap as I
 import Data.List (group, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust, isJust)
 import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word32, Word8)
-import Debug.Trace
-import GHC.Generics
+import Debug.Trace (trace)
+import GHC.Generics (Generic)
 import Graph.IntMap
   ( Edge8 (..),
     EdgeAttribute (..),
@@ -28,57 +29,56 @@ type UINode = Word32
 
 -- A Graph consists of nodes and edges, graph drawing arranges it from left to right,
 -- start to end.
-type CGraph n e = Graph (UINodeLabel n) [UIEdge e]
+type CGraph n e = Graph n [e]
 
-type CGraphL n e = (Graph (UINodeLabel n) [UIEdge e], Map UINode (Int, Int))
-
-data UINodeLabel a = UINodeLabel
-  { uinode :: a,
-    nestingFeatures :: Maybe LayerFeatures,
-    verticalNumber :: Maybe Word32 -- we want to keep the order of vertically connected Nodes,
-    -- so we enumerate them during construction and examine them during graph drawing, when reducing crossings
-  }
-  deriving (Show, Generic)
+type CGraphL n e = (Graph n [e], Map UINode (Int, Int))
 
 type Channel = Int -- The nth type of a type node
 -- This is path of function and type nodes with spaces that can be filled with options
 
-data UIEdge a = UIEdge
-  { edgeLabel :: a,
-    channelNrIn :: Maybe Channel, -- arg nr x of constructor node
-
-    -- | Me, Colleague-Name to remeber past decisions, but only people you know,
-    -- or company, group
-    channelNrOut :: Channel, -- function output is connected with input nr x of type node
-    edgeType :: EdgeType
-  }
+data EdgeType
+  = NormalEdge
+  | VerticalEdge -- When having options, they appear continuously in one column
+  -- We mark this in the graph with vertical edges from the first
+  -- option to the second and so on
+  | VirtualHorEdge -- virtual edges are not displayed but used for layouting and
+  -- naviagtion with the keyboard
+  | SeparatingEdge -- to connect graph components that are separate
   deriving (Show, Generic, Eq, Ord)
 
 type GraphMoveX = Int
 
 type Column = (GraphMoveX, [UINode])
 
-instance Eq a => Eq (UINodeLabel a) where
-  node1 == node2 = uinode node1 == uinode node2
+--instance NodeClass n => Eq n where
+--  node1 == node2 = uinode node1 == uinode node2
 
-class NodeClass a where
-  isDummy :: StandardEdge e => CGraph a e -> UINode -> Bool
-  isConnNode :: StandardEdge e => CGraph a e -> UINode -> Bool
-  isFunction :: StandardEdge e => CGraph a e -> UINode -> Bool
-  isMainArg :: CGraph a e -> UINode -> Bool
-  isSubLabel :: UINodeLabel a -> Bool
-  isArgLabel :: a -> Bool
-  subLabels :: a -> Int
-  connectionNode :: a
-  dummyNode :: a
+class NodeClass n where
+  isDummy :: EdgeClass e => CGraph n e -> UINode -> Bool
+  isConnNode :: EdgeClass e => CGraph n e -> UINode -> Bool
+  isFunction :: EdgeClass e => CGraph n e -> UINode -> Bool
+  isMainArg :: CGraph n e -> UINode -> Bool
+  isSubLabel :: n -> Bool
+  isArgLabel :: n -> Bool
+  subLabels :: n -> Int
+  connectionNode :: n
+  dummyNode :: Int -> n -- Depth -> n
+  nestingFeatures :: n -> Maybe LayerFeatures
+  updateLayer :: Maybe LayerFeatures -> n -> n
+  verticalNumber :: n -> Maybe Word32 -- we want to keep the order of vertically connected Nodes,
 
-class StandardEdge e where
-  standard :: e
+type ChannelNrIn = Maybe Channel
+
+type ChannelNrOut = Channel
+
+class EdgeClass e where
+  dummyEdge :: ChannelNrIn -> ChannelNrOut -> e
+  standard :: EdgeType -> e
+  edgeType :: e -> EdgeType
+  channelNrIn :: e -> ChannelNrIn
+  channelNrOut :: e -> ChannelNrOut
 
 ------------------------------------------------------------------------------------------------------
-
-dummyEdge :: StandardEdge e => UIEdge e
-dummyEdge = UIEdge standard Nothing 0 NormalEdge
 
 myFromJust :: Int -> Maybe a -> a
 myFromJust i term
@@ -115,60 +115,60 @@ virtBit = 0x2
 sepBit :: Word8
 sepBit = 0x4
 
-instance StandardEdge e => EdgeAttribute [UIEdge e] where -- Why can two nodes be connected with more than one edge?
+instance EdgeClass e => EdgeAttribute [e] where -- Why can two nodes be connected with more than one edge?
 -- To connect one function with several input types that are part of one type node
-  fastEdgeAttr (e : _) = f e
+  fastEdgeAttr (e : _) = f (edgeType e)
     where
-      f (UIEdge _ _ _ VerticalEdge) = vertBit
-      f (UIEdge _ _ _ VirtualHorEdge) = virtBit
-      f (UIEdge _ _ _ _) = 0
+      f VerticalEdge = vertBit
+      f VirtualHorEdge = virtBit
+      f _ = 0
   fastEdgeAttr _ = 0
   edgeFromAttr =
     Map.fromList
-      [ (vertBit, [UIEdge standard Nothing 0 VerticalEdge]),
-        (virtBit, [UIEdge standard Nothing 0 VirtualHorEdge]),
-        (0, [UIEdge standard Nothing 0 NormalEdge])
+      [ (vertBit, [standard VerticalEdge]),
+        (virtBit, [standard VirtualHorEdge]),
+        (0, [standard NormalEdge])
       ]
-  show_e (Just [UIEdge standard Nothing 0 e]) = show e
-  show_e _ = "no Edge"
 
+  -- show_e (Just [UIEdge standard Nothing 0 e]) = show e
+  -- show_e _ = "no Edge"
   bases _ = [Edge8 0, Edge8 vertBit, Edge8 virtBit]
 
-childrenSeparating :: StandardEdge e => CGraph a e -> Word32 -> VU.Vector Word32
+childrenSeparating :: EdgeClass e => CGraph n e -> Word32 -> VU.Vector Word32
 childrenSeparating gr n = adjacentNodesByAttr gr True n (Edge8 sepBit)
 
-childrenNoVertical :: StandardEdge e => Graph (UINodeLabel a) [UIEdge e] -> Word32 -> VU.Vector Word32
+childrenNoVertical :: EdgeClass e => Graph n [e] -> Word32 -> VU.Vector Word32
 childrenNoVertical gr n =
-  (adjacentNodesByAttr gr True n (Edge8 virtBit))
-    VU.++ (adjacentNodesByAttr gr True n (Edge8 0))
+  adjacentNodesByAttr gr True n (Edge8 virtBit)
+    VU.++ adjacentNodesByAttr gr True n (Edge8 0)
 
-childrenVertical :: StandardEdge e => Graph (UINodeLabel a) [UIEdge e] -> Word32 -> VU.Vector Word32
+childrenVertical :: EdgeClass e => Graph n [e] -> Word32 -> VU.Vector Word32
 childrenVertical gr n = adjacentNodesByAttr gr True n (Edge8 vertBit)
 
-parentsVertical :: StandardEdge e => Graph (UINodeLabel a) [UIEdge e] -> Word32 -> VU.Vector Word32
+parentsVertical :: EdgeClass e => Graph n [e] -> Word32 -> VU.Vector Word32
 parentsVertical gr n = adjacentNodesByAttr gr False n (Edge8 vertBit)
 
-parentsNoVertical :: StandardEdge e => Graph (UINodeLabel a) [UIEdge e] -> Word32 -> VU.Vector Word32
+parentsNoVertical :: EdgeClass e => Graph n [e] -> Word32 -> VU.Vector Word32
 parentsNoVertical gr n =
-  (adjacentNodesByAttr gr False n (Edge8 virtBit))
-    VU.++ (adjacentNodesByAttr gr False n (Edge8 0))
+  adjacentNodesByAttr gr False n (Edge8 virtBit)
+    VU.++ adjacentNodesByAttr gr False n (Edge8 0)
 
-verticallyConnectedNodes :: StandardEdge e => CGraph a e -> UINode -> [UINode]
+verticallyConnectedNodes :: EdgeClass e => CGraph n e -> UINode -> [UINode]
 verticallyConnectedNodes g n =
   VU.toList $
-    (goUp (parentsVertical g n))
-      VU.++ (VU.cons n (goDown (childrenVertical g n)))
+    goUp (parentsVertical g n)
+      VU.++ VU.cons n (goDown (childrenVertical g n))
   where
     goUp nodes
       | VU.null nodes = VU.empty
       | otherwise =
         nodes
-          VU.++ (VU.concatMap (\x -> goUp (parentsVertical g x)) nodes)
+          VU.++ VU.concatMap (goUp . parentsVertical g) nodes
     goDown nodes
       | VU.null nodes = VU.empty
       | otherwise =
         nodes
-          VU.++ (VU.concatMap (\x -> goDown (childrenVertical g x)) nodes)
+          VU.++ VU.concatMap (goDown . childrenVertical g) nodes
 
 ------------------------------------------------------------------------------------------------------
 
@@ -224,13 +224,3 @@ data Border
 instance FromJSON Border
 
 instance ToJSON Border
-
-data EdgeType
-  = NormalEdge
-  | VerticalEdge -- When having options, they appear continuously in one column
-  -- We mark this in the graph with vertical edges from the first
-  -- option to the second and so on
-  | VirtualHorEdge -- virtual edges are not displayed but used for layouting and
-  -- naviagtion with the keyboard
-  | SeparatingEdge -- to connect graph components that are separate
-  deriving (Show, Generic, Eq, Ord)

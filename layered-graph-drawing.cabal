@@ -37,7 +37,7 @@ executable graph-drawing-exe
                      , layered-graph-drawing
 --                     , diagrams
 --                     , diagrams-lib
---                     , diagrams-svg
+                     , diagrams-svg
                      , intmap-graph
 --                     , SVGFonts
                      , text

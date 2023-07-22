@@ -21,16 +21,13 @@ If a connection line passes over several layers, a node has to be added in every
 ![Longest path](https://raw.githubusercontent.com/BeFunctional/layered-graph-drawing/main/graphs/g1.svg)
 
 3. Crossing Reduction
+Using: [Simple and Eﬃcient Bilayer Cross Counting](http://ls11-www.cs.tu-dortmund.de/downloads/papers/BJM04.pdf)
 
 ![Crossing reduction](https://raw.githubusercontent.com/BeFunctional/layered-graph-drawing/main/graphs/g2.svg)
 
-Using: [Simple and Eﬃcient Bilayer Cross Counting](http://ls11-www.cs.tu-dortmund.de/downloads/papers/BJM04.pdf)
-
 4. Y-placement (works, but is not an average of alignments)
-
-![y placement](https://raw.githubusercontent.com/BeFunctional/layered-graph-drawing/main/graphs/g3.svg)
-
 Using: [Fast and Simple Horizontal Coordinate Assignment](https://kops.uni-konstanz.de/server/api/core/bitstreams/e3f1cd1e-3fd4-422d-852e-77404160f664/content)
+![y placement](https://raw.githubusercontent.com/BeFunctional/layered-graph-drawing/main/graphs/g3.svg)
 
 ## Algorithm extensions (vertical and virtual edges, sub fields)
 
@@ -50,4 +47,7 @@ This algorithm was implemented to develop a visual programming environment, whic
  * Make graphs inside graphs look better by embedding a layouted graph inside a graph.
 
 ## Example Usage
-  See app/Main.hs
+You can test this library by 
+ * Uncommenting the ```diagrams```-code in [app/Main.hs](https://github.com/BeFunctional/layered-graph-drawing/blob/main/app/Main.hs) and uncommenting the ```diagrams```-dependencies in [layerd-graph-drawing.cabal](https://github.com/BeFunctional/layered-graph-drawing/blob/main/layered-graph-drawing.cabal)
+ * ```cabal build``` or ```stack build```
+ * generate the upper image by executing ```graph-drawing-exe -w 400 -o g3.svg```

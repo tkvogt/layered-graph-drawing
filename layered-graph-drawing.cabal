@@ -1,14 +1,14 @@
 name:                layered-graph-drawing
 version:             0.1.0.0
-synopsis:            Graph Drawing after Sugyama
-description:         Please see README.md
-homepage:            http://github.com/tkvogt/layered-graph-drawing#readme
+synopsis:            Layered Graph Drawing after Sugiyama
+description:         Calculates the positions of graph nodes in a table with layered graph drawing
+homepage:            https://github.com/BeFunctional/layered-graph-drawing
 license:             BSD3
 license-file:        LICENSE
 author:              Tillmann Vogt
-maintainer:          example@example.com
+maintainer:          tillk.vogt@gmail.com
 copyright:           2023 Tillmann Vogt
-category:            Web
+category:            graphics, graph
 build-type:          Simple
 -- extra-source-files:
 cabal-version:       >=1.10
@@ -43,8 +43,4 @@ executable graph-drawing-exe
                      , text
 
   default-language:    Haskell2010
-123628
-974859
-source-repository head
-  type:     git
-  location: https://github.com/tkvogt/layered-graph-drawing
+

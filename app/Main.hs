@@ -205,6 +205,7 @@ data ArgNode = ArgNode
   deriving (Eq, Ord, Show, Generic)
 
 instance NodeClass UINodeLabel where
+  isCase gr n = False
   isDummy gr n = False -- maybe False isDummyLabel (Graph.lookupNode n gr)
   isConnNode gr n = maybe False isConnLabel (Graph.lookupNode n gr)
   isFunction gr n = maybe False isFuncLabel (Graph.lookupNode n gr)

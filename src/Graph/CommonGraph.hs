@@ -55,9 +55,10 @@ type Column = (GraphMoveX, [UINode])
 
 class NodeClass n where
   isDummy :: EdgeClass e => CGraph n e -> UINode -> Bool
+  isCase :: EdgeClass e => CGraph n e -> UINode -> Bool
   isConnNode :: EdgeClass e => CGraph n e -> UINode -> Bool
   isFunction :: EdgeClass e => CGraph n e -> UINode -> Bool
-  isMainArg :: CGraph n e -> UINode -> Bool
+  isMainArg :: EdgeClass e => CGraph n e -> UINode -> Bool
   isSubLabel :: n -> Bool
   isArgLabel :: n -> Bool
   subLabels :: n -> Int
@@ -65,7 +66,7 @@ class NodeClass n where
   dummyNode :: Int -> n -- Depth -> n
   nestingFeatures :: n -> Maybe LayerFeatures
   updateLayer :: Maybe LayerFeatures -> n -> n
-  verticalNumber :: n -> Maybe Word32 -- we want to keep the order of vertically connected Nodes,
+  verticalNumber :: n -> Maybe Int -- we want to keep the order of vertically connected Nodes,
 
 type ChannelNrIn = Maybe Channel
 
@@ -91,18 +92,18 @@ myFromJust i term
       fromJust
       term
 
-myhead :: Int -> [a] -> a
-myhead i a
+myHead :: Int -> [a] -> a
+myHead i a
   | null a = error ("head: empty list " ++ show i)
   | otherwise = head a
 
-vhead :: (VU.Unbox a) => Int -> VU.Vector a -> a
-vhead i a
+vHead :: (VU.Unbox a) => Int -> VU.Vector a -> a
+vHead i a
   | VU.null a = error ("VU.head: empty list " ++ show i)
   | otherwise = VU.head a
 
 rmdups :: (Ord a) => [a] -> [a]
-rmdups = map (myhead 500) . group . sort
+rmdups = map (myHead 500) . group . sort
 
 ------------------------------------------------------------------------------------------------------
 
@@ -130,8 +131,8 @@ instance EdgeClass e => EdgeAttribute [e] where -- Why can two nodes be connecte
         (0, [standard NormalEdge])
       ]
 
-  -- show_e (Just [UIEdge standard Nothing 0 e]) = show e
-  -- show_e _ = "no Edge"
+--  show_e (Just [UIEdgeLabel standard Nothing 0 e]) = show e
+  show_e _ = "no Edge"
   bases _ = [Edge8 0, Edge8 vertBit, Edge8 virtBit]
 
 childrenSeparating :: EdgeClass e => CGraph n e -> Word32 -> VU.Vector Word32
@@ -152,6 +153,11 @@ parentsNoVertical :: EdgeClass e => Graph n [e] -> Word32 -> VU.Vector Word32
 parentsNoVertical gr n =
   adjacentNodesByAttr gr False n (Edge8 virtBit)
     VU.++ adjacentNodesByAttr gr False n (Edge8 0)
+
+parentsNoVirtual :: EdgeClass e => CGraph n e -> Word32 -> VU.Vector Word32
+parentsNoVirtual gr n =
+  (adjacentNodesByAttr gr False n (Edge8 vertBit))
+    VU.++ (adjacentNodesByAttr gr False n (Edge8 0))
 
 verticallyConnectedNodes :: EdgeClass e => CGraph n e -> UINode -> [UINode]
 verticallyConnectedNodes g n =

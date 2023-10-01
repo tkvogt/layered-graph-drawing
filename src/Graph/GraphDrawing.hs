@@ -13,10 +13,10 @@ module Graph.GraphDrawing where
 
 import qualified Data.IntMap as I
 import qualified Data.IntMap.Strict as IM
-import Data.List (elemIndex, find, group, groupBy, intercalate, sort, sortBy, sortOn, (\\))
+import Data.List (elemIndex, find, group, groupBy, intercalate, sort, sortBy, sortOn, (\\), partition)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, fromJust, isNothing, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Tuple (swap)
@@ -33,34 +33,143 @@ import Graph.CommonGraph
     EdgeClass (channelNrIn, channelNrOut, dummyEdge, standard),
     EdgeType (NormalEdge),
     GraphMoveX,
-    LayerFeatures (LayerFeatures),
-    NodeClass (connectionNode, dummyNode, isConnNode, isDummy, isMainArg, isSubLabel, subLabels),
+    LayerFeatures (LayerFeatures, layer),
+    NodeClass (connectionNode, dummyNode, isConnNode, isDummy, isMainArg, isSubLabel, subLabels, nestingFeatures),
     UINode,
     childrenNoVertical,
     childrenSeparating,
     childrenVertical,
+    isCase,
     isFunction,
     myFromJust,
-    myhead,
+    myHead,
     parentsNoVertical,
     parentsVertical,
+    parentsNoVirtual,
     rmdups,
     verticallyConnectedNodes,
-    vhead,
   )
 import qualified Graph.CommonGraph as Common
 import Graph.IntMap (Graph (..), nodes)
 import qualified Graph.IntMap as Graph
+import Graph.SubGraphWindows (subgraphWindows, getRows, getColumns, LayoutedSubgraph(..), ShowGraph)
 
--- Also returns a map with Columns to allow navigation with arrows
+-- | Also returns a map with Columns to allow navigation with arrows
 layeredGraphAndCols ::
-  (NodeClass n, Show n, EdgeClass e, Show e) =>
+  (NodeClass n, EdgeClass e, ShowGraph n e) =>
   Bool ->
   CGraph n e ->
   (CGraphL n e, (Map.Map GraphMoveX [UINode], Map.Map Int [Column]))
 layeredGraphAndCols cross graph = (g, getColumns g)
   where
-    g = layeredGraph cross graph
+    g = layeredGraphWithSub cross graph
+
+-- | layered graph drawing with subgraph layouting
+layeredGraphWithSub :: (NodeClass n, EdgeClass e, ShowGraph n e) => VU.Unbox UINode => Bool -> CGraph n e -> CGraphL n e
+layeredGraphWithSub cross graph = Debug.Trace.trace (show("deepestNesting", deepestNesting graph)) $
+                                  subgraphLayouting cross (graph, pos) layoutedSubGraphs (deepestNesting graph)
+                                  -- fst (layeredGraph cross graph [])
+  where pos = Map.empty
+        layoutedSubGraphs = Map.empty
+
+type ID = Int
+type Nesting = Int
+type ParentGraphOf = Map ID [ID] -- children of parent
+
+-- | Nestings of graphs have to be layouted by layouting the deepest graphs, an then embedding it into its parent graph
+--   which is then also layouted recursively
+--
+subgraphLayouting :: (NodeClass n, EdgeClass e, ShowGraph n e) =>
+                     Bool -> CGraphL n e -> Map ID (LayoutedSubgraph n e)-> (Map Nesting [(ID, [UINode])], ParentGraphOf) -> CGraphL n e
+subgraphLayouting    cross   (completeGraph,pos) layoutedSubGraphs          (nestedGraphs,                 subgraphs)
+  | Map.null nestedGraphs ||
+    fst deepestGraphs == 0 = Debug.Trace.trace ("subgraphLayouting0 " ++ show (graphsToEmbed)) $
+                             fst (layeredGraph cross completeGraph (map snd (Map.toList graphsToEmbed)))
+  | otherwise = Debug.Trace.trace ("subgraphLayouting1 " ++ show (graphsToEmbed)) $
+                subgraphLayouting cross (completeGraph,pos) graphsToEmbed (Map.deleteMax nestedGraphs, subgraphs)
+  where graphsToEmbed = Map.fromList (map layout nodePartitions)
+        layout (idOfSubGraph,gr) = (idOfSubGraph, sub (layeredGraph cross gr pickEmbeddings))
+          where pickEmbeddings | isJust children = mapMaybe (\n -> Map.lookup n layoutedSubGraphs) (fromJust children)
+                               | otherwise = []
+                children = Map.lookup idOfSubGraph subgraphs
+                sub :: (NodeClass n, EdgeClass e) => (CGraphL n e, [[UINode]]) -> LayoutedSubgraph n e
+                sub gr = LayoutedSubgraph startNode gr
+                  where startNode = rmdups $ VU.toList (nodesWithoutChildrenVertLayer (fst (fst gr)))
+
+        -- Pick the deepest graphs, take the complete graph and for each graph only keep the nodes of this graph
+        nodePartitions = map (\(i,ns) -> (i, Graph.deleteNodes [dummyEdge Nothing 0] (nodesToDelete ns) completeGraph)) nodesOfGraphs
+          where nodesToDelete ns = map fromIntegral ((Graph.nodes completeGraph) \\ (map fromIntegral ns))
+                -- | pick the deepest nesting
+                nodesOfGraphs :: [(ID, [UINode])]
+                nodesOfGraphs | Map.null nestedGraphs = []
+                              | otherwise = snd deepestGraphs
+        deepestGraphs = Map.findMax nestedGraphs
+
+
+-- | Similar to longestPathAlgo, we take the rightmost node (which is an output type node) and explore the graph from there to the left
+--   When a function is exploded the nesting value of every node of this subgraph is increased by one by the explosion (ExplodeImplode.hs).
+--   A difference of the nesting value of two adjacent nodes signals a new subgraph.
+--   This function returns a map of subgraphs with a nesting and which graph is embedded in another graph
+deepestNesting :: (NodeClass n, EdgeClass e, Show n) => CGraph n e -> (Map Nesting [(ID, [UINode])], ParentGraphOf)
+deepestNesting    gr = Debug.Trace.trace (show ("startNode", startNode, subs))
+                       (Map.fromList subList, Map.fromList childrenOfParent)
+  where
+    subList = map f (groupBy gb (sortBy sb subs))
+    gb (n0,_,_,_) (n1,_,_,_) = n0 == n1
+    sb (n0,_,_,_) (n1,_,_,_) = compare n0 n1
+    f ls = (sel1 (head ls), map regroup ls)
+      where regroup  (n,i,ns,_) = (i,ns)
+            sel1 (n,i,ns,_) = n
+
+    childrenOfParent = map sel24 subs
+      where sel24 (n,i,ns,is) = (i,is)
+
+    subs | null startNode = []
+         | otherwise = subGraphs 0 0 (head startNode)
+
+    startNode = rmdups $ VU.toList (nodesWithoutChildrenVertLayer gr)
+
+    parents n = VU.toList (parentsNoVirtual gr n)
+
+    -- | The idea of this recursion is to go backwards from the final node and add non-vertical nodes that are fully connected at the input
+    -- if there is only a vertical layer possible, add it
+    subGraphs :: Nesting -> ID -> UINode -> [(Nesting, ID, [UINode], [ID])]
+    subGraphs nesting lastId node
+      | null sameNestedNodes = -- Debug.Trace.trace ("\n§§1 " ++ show ans)
+                               []
+--      | null differentNestedNodes = Debug.Trace.trace ("\n§§2 " ++ show ans)
+--                                    []
+      | otherwise = -- Debug.Trace.trace ("\n§§3 (sameNestedNodes, lastId, node, differentNestedNodes)" ++ show (sameNestedNodes, lastId, node, differentNestedNodes)) $
+                    (nesting, lastId, sameNestedNodes, childrenIdsOfParent) : (concat newSubGraphs)
+      where
+        ans = allNodesWithSameNesting node
+        (sameNestedNodes, differentNestedNodes) = (myNub (concatMap fst ans), myNub (concatMap snd ans))
+
+        childrenIdsOfParent = catMaybes (zipWith getId ids (map nest differentNestedNodes))
+        getId i n | isChildGraph n = Just i
+                  | otherwise = Nothing
+        isChildGraph n = n == ((nest node)+1)
+        newSubGraphs = zipWith3 subGraphs (map nest differentNestedNodes) ids differentNestedNodes
+        ids = [(lastId+1) ..]
+
+    nest n | isJust lu = -- Debug.Trace.trace ("nest0 " ++ show (n,nestingFeatures (fromJust lu))) $
+                         maybe 0 layer (nestingFeatures (fromJust lu))
+           | otherwise = -- Debug.Trace.trace ("nest1")
+                         0
+      where lu = Graph.lookupNode n gr
+
+    -- | Finds recursively all parent nodes with the same nesting, also returns the nodes that have a different nesting
+    allNodesWithSameNesting :: UINode -> [([UINode],[UINode])]
+    allNodesWithSameNesting node
+      | null ps || not (null differentNestedNodes) = -- Debug.Trace.trace ("\n§§4 " ++ show (node,ps))
+                                                     [([node],differentNestedNodes)]
+      | otherwise = -- Debug.Trace.trace ("\n§§5 " ++ show (node,ps,sameNestedNodes, differentNestedNodes))
+                    (sameNestedNodes, differentNestedNodes) : (accumulate (concatMap allNodesWithSameNesting ps))
+      where (sameNestedNodes, differentNestedNodes) = partition sameNest (node : ps)
+              where sameNest n = nest n == nest node
+            ps = parents node
+            accumulate ls = [(concatMap fst ls, concatMap snd ls)]
+
 
 -- Debug with https://dreampuf.github.io/GraphvizOnline using neato or fdp engine
 
@@ -72,24 +181,23 @@ layeredGraphAndCols cross graph = (g, getColumns g)
 --    as straight as possible
 
 layeredGraph ::
-  (VU.Unbox UINode, NodeClass n, Show n, EdgeClass e, Show e) =>
-  Bool ->
-  CGraph n e ->
-  CGraphL n e
-layeredGraph cross graph =
+  (VU.Unbox UINode, NodeClass n, EdgeClass e, ShowGraph n e) =>
+  Bool -> CGraph n e -> [LayoutedSubgraph n e] -> (CGraphL n e, [[UINode]]) -- TODO subgraphs
+layeredGraph cross graph subgraphs =
   -- Debug.Trace.trace ("layered "++ show graph ++"\n") -- ++ showEdges graph ++ show (Graph.edgeLabels graph)) $ -- ++"\nnewGraph\n" ++ show newGraph ++"\n") $
   newGraph
   where
-    sortLayers (gr, ls) = (gr, map sort ls) -- makes the dummy vertices appear lower
+    sortLayers (gr, ls) = (gr, map sort ls) -- makes the dummy vertices appear lower -- TODO don't move layouted nodes
     newGraph =
-      ( -- subgraphWindows .
-        yCoordinateAssignement
+      (   subgraphWindows subgraphs .
+            yCoordinateAssignement
           -- .
-          -- primitiveYCoordinateAssignement
-          . crossingReduction 1 cross
+          --  primitiveYCoordinateAssignement
+          . crossingReduction 2 cross subgraphs
+          . arrangeMetaNodes
           . sortLayers
           . addConnectionVertices
-          . longestPathAlgo
+          . longestPathAlgo subgraphs
           . addMissingInputNodes -- does not change the graph, only computes layers
       )
         graph
@@ -104,7 +212,7 @@ graphvizNodes (gr, m) = concatMap ((++ "\n") . sh) (I.toList (Graph.nodeLabels g
 
 primitiveYCoordinateAssignement :: (CGraph n e, [[UINode]]) -> CGraphL n e
 primitiveYCoordinateAssignement (graph, layers) =
-  --    Debug.Trace.trace ("primitiveY1 "++ show (graph,layers,ns)) $
+      Debug.Trace.trace ("primitiveY1 "++ show (layers,ns)) $
   (graph, Map.fromList ns)
   where
     ns :: [(UINode, (Int, Int))]
@@ -138,7 +246,7 @@ primitiveYCoordinateAssignement2 (g, (la:layers)) =
                         ((0,y),e) : childYOrInc (y+1) (fromMaybe y cy) es
           where cy | VU.null (child e) = Nothing
                    | otherwise = fmap snd lu
-                lu = lookup (vhead 500 (child e)) (map (\(a,b) -> (b,a)) l0)
+                lu = lookup (vHead 500 (child e)) (map (\(a,b) -> (b,a)) l0)
     child el = childrenNoVertical g el
     incX i ((x,y),n) = (x-i,y,n)
     incY (x,y)     = (x,y+1)
@@ -157,10 +265,10 @@ positionNode graph (x,y,n) =
 
 -- ^ See "Fast and Simple Horizontal Coordinate Assignment" (Brandes, Köpf)
 
-yCoordinateAssignement :: (NodeClass n, EdgeClass e) => (CGraph n e, [[UINode]]) -> CGraphL n e
+yCoordinateAssignement :: (NodeClass n, EdgeClass e) => (CGraph n e, [[UINode]]) -> (CGraphL n e, [[UINode]])
 yCoordinateAssignement (graph, layers) =
   -- Debug.Trace.trace ("\nyCoordAssign "++ show (layers,graph,pos)) $
-  (graph, pos)
+  ((graph, pos), layers)
   where
     -- newGraph = graph { nodeLabels = I.fromList placedNodes } -- for debugging (Map.fromList edgesToKeep)
     pos :: Map UINode (Int, Int)
@@ -392,16 +500,16 @@ sweepForIndependentEdgeLists graph medians allowedEdges dir inspectionEdges (y0,
     (inspectEdgesFrom, inspectEdgesTo) = inspectionEdges
     (lowerMedians, upperMedians) = medians
     (left, _up) = dir
-    (n0, b0) = myhead 60 layer0
-    (n1, b1) = myhead 61 layer1
+    (n0, b0) = myHead 60 layer0
+    (n1, b1) = myHead 61 layer1
     tl0
       | null layer0 = []
       | otherwise = tail layer0
     tl1
       | null layer1 = []
       | otherwise = tail layer1
-    hl1 = fst (myhead 62 layer1)
-    verticalNode = VU.elem (fst (myhead 63 tl1)) (Graph.adjacentNodesByAttr graph True hl1 (Graph.Edge8 Common.vertBit))
+    hl1 = fst (myHead 62 layer1)
+    verticalNode = VU.elem (fst (myHead 63 tl1)) (Graph.adjacentNodesByAttr graph True hl1 (Graph.Edge8 Common.vertBit))
     resEdges = myNub (Map.elems newInsFrom ++ Map.elems newInsTo ++ Set.toList missingEdges)
 
     edgeFrom :: Maybe MYN
@@ -486,7 +594,7 @@ resolveConfs (left, up) (e0 : edges) i
     conflictList = map (conflict left e0) edges
 
     edgesE1First = e1 : (filter (\e -> e /= e0 && e /= e1) (concatMap toEdges conflictList))
-    e1 = head (toEdges firstE1)
+    e1 = myHead 64 (toEdges firstE1)
     firstE1 = myFromJust 511 (find e1Prevails conflictList)
 
     consistent = isConsistent conflictList
@@ -771,13 +879,12 @@ align graph layers edges (_alignLeft, _up) =
                 ++ merge1 (map (snd . snd) oneBlockWithVerts)
             )
         merge1 [] = []
-        merge1 xs = (map head fil) : (merge1 (map tail fil))
+        merge1 xs = (map (myHead 65) fil) : (merge1 (map myTail fil))
           where
             fil = filter (not . null) xs
         oneBlockWithVerts =
-          -- Debug.Trace.trace ("oneBlock " ++ show (reverse (blockNodesDown (head ks)), tail (blockNodesUp (head ks)))) $
-          reverse (blockNodesDown (head ks))
-            ++ tail (blockNodesUp (head ks))
+          reverse (blockNodesDown (myHead 66 ks))
+            ++ myTail (blockNodesUp (myHead 67 ks))
 
         ks = Map.keys m ++ Map.elems m
 
@@ -866,7 +973,7 @@ longestinfrequentPaths _ [] = VU.empty
 longestinfrequentPaths _ [_] = VU.empty
 longestinfrequentPaths g (l0 : l1 : layers)
   | null r = VU.empty
-  | otherwise = VU.take (length layers + 2) $ myhead 64 r
+  | otherwise = VU.take (length layers + 2) $ myHead 68 r
   where
     r = map (liPaths g (l1 : layers) []) (startNodes g l0 l1)
 
@@ -892,167 +999,169 @@ liPaths g (l0 : layers) ns node = VU.concatMap (liPaths g layers (node : ns)) cs
         (childrenNoVertical g node)
 
 myNub :: Ord a => [a] -> [a]
-myNub = map (myhead 65) . group . sort
+myNub = map (myHead 69) . group . sort
 
 myNub2 :: [(Int, UINode)] -> [(Int, UINode)]
-myNub2 = map (myhead 66) . groupBy nnn . sortBy nn
+myNub2 = map (myHead 70) . groupBy nnn . sortBy nn
   where
     nn (_, n0) (_, n1) = compare n0 n1
     nnn (_, n0) (_, n1) = n0 == n1
 
 type UnconnectedChildren = [UINode]
 
+myTail ls | null ls = []
+          | otherwise = tail ls
+
+type SubgraphLayers = [[[UINode]]] -- several graphs, where each graph has several layers, and a layer is a list of nodes
+
 -- | Every graph has a longest path, which is the center of attention for us
 -- Return layers of node ids
--- This algorithm is a little bit more complicated because we can connect nodes "vertically",
+-- This algorithm is a little bit more complicated because have to connect nodes "vertically",
 -- so that they are guaranteed to be all in one vertical layer
 -- All nodes before this vertical layer have to be placed in layers before we can proceed
-longestPathAlgo :: (NodeClass n, EdgeClass e) => CGraph n e -> (CGraph n e, [[UINode]])
-longestPathAlgo g =
-  -- Debug.Trace.trace ("\nlongestPathAlgo\n" ++ show (g, newLayers, moveFinalNodesLeftToVert newLayers)) $
-  --  Debug.Trace.trace ("\nlongestPathAlgo " ++ show g ++
-  --                     "\nnewLayers" ++ show newLayers ++
-  --                     "\nnodesWithoutChildren" ++ show nodesWithoutChildren ++
-  --                     "\nverticalLayers" ++ show verticalLayers ++
-  --                     "\noptionNodes" ++ show optionNodes ++
-  --                     "\nnodesWithoutChildrenVertLayer" ++ show nodesWithoutChildrenVertLayer ++
-  --                     "\n"++ showEdges g)
-  (g, moveFinalNodesLeftToVert (map rmdups newLayers))
+longestPathAlgo :: (NodeClass n, EdgeClass e, ShowGraph n e) => [LayoutedSubgraph n e] -> CGraph n e -> (CGraph n e, [[UINode]])
+longestPathAlgo subgraphs g = -- Debug.Trace.trace ("\nlongestPathAlgo\n" ++ show (g, newLayers, moveFinalNodesLeftToVert newLayers)) $
+  Debug.Trace.trace ("\nlongestPathAlgo " ++ show (subgraphs,g,moveFinalNodesLeftToVert (map rmdups newLayers))) -- ++
+--                     "\nnewLayers" ++ show newLayers)
+--                     "\nnodesWithoutChildren" ++ show nodesWithoutChildren ++
+--                     "\nverticalLayers" ++ show (verticalLayers g) ++
+--                     "\noptionNodes" ++ show optionNodes ++
+--                     "\nnodesWithoutChildrenVertLayer" ++ show nodesWithoutChildrenVertLayer ++
+--                     "\n"++ showEdges g)
+                    (g, moveFinalNodesLeftToVert (map rmdups newLayers))
   where
     moveFinalNodesLeftToVert :: [[UINode]] -> [[UINode]]
-    moveFinalNodesLeftToVert ls =
-      -- Debug.Trace.trace ("nodesToMove "++ show (nodesToMove, nodesAndPrevious)) $
-      (myhead 67 ls \\ nodesToMove) : (foldr insert (tail ls) nodesAndPrevious)
-      where
-        nodesToMove
-          | length ls < 2 = []
-          | otherwise = filter (notEl . VU.toList . parentsNoVertical g) (myhead 68 ls)
-        notEl [n] = n `notElem` myhead 69 (tail ls)
-        notEl _ = False
-        insert (n, p) lays
-          | null fpl = lays -- Debug.Trace.trace ("insert "++ show lays ++"\n\n"++ show (add lays (find p lays) n)) $
-          | otherwise = add lays (head fpl) n
-          where
-            fpl = findn p lays
-        nodesAndPrevious = zip nodesToMove (map (VU.head . parentsNoVertical g) nodesToMove)
-        add list pos n = take (pos - 1) list ++ ((list !! (pos - 1)) ++ [n]) : (drop pos list)
-        findn p l = [fst il | il <- zip [0 ..] l, p `elem` snd il]
+    moveFinalNodesLeftToVert ls = -- Debug.Trace.trace ("nodesToMove "++ show (nodesToMove, nodesAndPrevious)) $
+                                  ((myHead 67 ls) \\ nodesToMove) : (foldr insert (tail ls) nodesAndPrevious)
+      where nodesToMove | (length ls) < 2 = []
+                        | otherwise = filter (notEl . VU.toList . (parentsNoVertical g)) (myHead 68 ls)
+            notEl [n] = not (elem n (myHead 69 (tail ls)))
+            notEl _ = False
+            insert (n,p) lays | null fpl  = lays -- Debug.Trace.trace ("insert "++ show lays ++"\n\n"++ show (add lays (find p lays) n)) $
+                              | otherwise = add lays (head fpl) n
+              where fpl = find p lays
+            nodesAndPrevious = zip nodesToMove (map (vHead . (parentsNoVertical g)) nodesToMove)
+            add list pos n = (take (pos-1) list) ++ ((list !! (pos-1)) ++ [n]) : (drop pos list)
+            find p l = [ fst il | il <- (zip [0..] l), elem p (snd il) ]
 
-    newLayers = layersrec (rmdups $ VU.toList nodesWithoutChildrenVertLayer) fil []
-    fil = filter (not . null . sel2) verticalLayers
-    sel1 (x, _, _) = x
-    sel2 (_, y, _) = y
-    ns = VU.map fromIntegral (VU.fromList (nodes g))
-    nodesWithoutChildren = VU.filter (VU.null . cs) ns
-    nodesWithoutChildrenVertLayer :: VU.Vector UINode
-    nodesWithoutChildrenVertLayer =
-      -- Debug.Trace.trace ("nwcvl "++ show (nodesWithoutChildren, nwcvl))
-      nwcvl
-      where
-        nwcvl = VU.concatMap (findLayers (map sel1 verticalLayers)) nodesWithoutChildren
-    findLayers :: [[UINode]] -> UINode -> VU.Vector UINode
-    findLayers ls n
-      | null ls = VU.singleton n
-      | otherwise = VU.fromList (concat (map findL ls))
-      where
-        findL l
-          | elem n l = l
-          | otherwise = [n]
-    cs node = Graph.children g node [dummyEdge Nothing 0]
-    (_, optionNodes) = partitionNodes g ns -- nonOptionNodes
-    verticalLayers =
-      -- Debug.Trace.trace (show ("verticalLayers", VU.toList optionNodes, vLayers (VU.toList optionNodes))) $
-      vLayers (VU.toList optionNodes)
-
-    vLayers [] = []
-    vLayers (n : ns1) =
-      -- Debug.Trace.trace (show ("vLayers", n, newLayer, addUnconnectedChildren newLayer)) $
-      (addUnconnectedChildren newLayer) : (vLayers (ns1 \\ newLayer))
-      where
-        newLayer = sort $ verticallyConnectedNodes g n
-        addUnconnectedChildren :: [UINode] -> ([UINode], UnconnectedChildren, Bool)
-        addUnconnectedChildren layer1 = (layer1, myNub $ VU.toList (VU.concat (map nonVertChildren layer1)), False)
-        nonVertChildren node = childrenNoVertical g node
+    startNode = rmdups $ VU.toList (nodesWithoutChildrenVertLayer g)
+    newLayers = layersrec startNode fil [] (newActiveSubgraphs startNode)
+    fil = filter (not . null . sel2) (verticalLayers g)
 
     -- the idea of this recursion is to go backwards from the final node and add non-vertical nodes that are fully connected at the input
     -- if there is only a vertical layer possible, add it
-    layersrec :: [UINode] -> [([UINode], UnconnectedChildren, Bool)] -> [UINode] -> [[UINode]]
-    layersrec curLayer vertLayers usedNodes
-      | null curLayer -- Debug.Trace.trace "\n§§1 "
-        =
-        []
-      | length usedNodes + length curLayer > length (nodes g) =
-        Debug.Trace.trace
-          ("\n§§2 " ++ show (curLayer, length usedNodes, usedNodes, length curLayer, length (nodes g)))
-          [curLayer] -- should not happen
-      | otherwise {-Debug.Trace.trace ("\n§§3 curLayer "++ show curLayer ++
-                                     "\nfullyConnectedVertNodes2 " ++ show fullyConnectedVertNodes2 ++
-                                     "\nnewCurLayerOrVert " ++ show newCurLayerOrVert ++
-                                     "\nusedNodes " ++ show usedNodes ++
-                                     "\nlayerParents curLayer " ++ show (layerParents curLayer) ++
-                                     "\nvertLayers    " ++ show vertLayers ++
-                                     "\nnewVertLayers " ++ show newVertLayers ++
-                                     "\nfil" ++ show fil)-} =
-        curLayer : (layersrec newCurLayerOrVert filtered (usedNodes ++ curLayer))
+    layersrec :: [UINode] -> [([UINode],UnconnectedChildren,Bool)] -> [UINode] -> SubgraphLayers -> [[UINode]]
+    layersrec curLayer vertLayers usedNodes activeSubgraphLayers
+      | null curLayer = -- Debug.Trace.trace "\n§§1 "
+                        []
+      | (length usedNodes) + (length curLayer) > (length (nodes g)) =
+                        -- Debug.Trace.trace ("\n§§2 "++ show (curLayer,length usedNodes,usedNodes,length curLayer,length (nodes g)))
+                        [curLayer] -- should not happen
+      | otherwise = -- Debug.Trace.trace ("\n§§3 curLayer "++ show curLayer ++
+                    --                   "\nfullyConnectedVertNodes " ++ show fullyConnectedVertNodes ++
+                    --                   "\nnewCurLayerOrVert " ++ show newCurLayerOrVert ++
+                    --                   "\nusedNodes " ++ show usedNodes ++
+                    --                   "\nlayerParents curLayer " ++ show (layerParents curLayer) ++
+                    --                   "\nvertLayers    " ++ show vertLayers ++
+                    --                   "\nnewVertLayers " ++ show newVertLayers ++
+                    --                   "\nfil" ++ show fil)
+                    curLayer : (layersrec newCurLayerOrVert fil (usedNodes ++ curLayer) ((map myTail activeSubgraphLayers) ++ (newActiveSubgraphs curLayer)))
       where
         newVertLayers = map adjustConnected vertLayers
-        adjustConnected (someLayer, unconnectedChildren, _) =
-          -- Debug.Trace.trace ("adjustConnected " ++ show (someLayer, unconnectedChildren, newun, map (isNotMainFunctionArg g) someLayer)) $
-          (someLayer, newun, null newun && all (isNotMainFunctionArg g) someLayer)
-          where
-            newun = unconnectedChildren \\ curLayer
+        adjustConnected (someLayer, unconnectedChildren, _) = -- Debug.Trace.trace ("adjustConnected " ++ show (someLayer, unconnectedChildren, newun, map (isNotMainFunctionArg g) someLayer)) $
+                        (someLayer, newun, null newun && all (isNotMainFunctionArg g) someLayer)
+          where newun = unconnectedChildren \\ curLayer
 
-        filtered
-          | not (null newCurLayer) -- Debug.Trace.trace ("fil0 "++ show (newVertLayers)) $
-            =
-            filter (not . changed) newVertLayers
-          | not (null fullyConnectedVertNodes2) -- Debug.Trace.trace ("fil1 "++ show (filter (not . isFullyConnected) newVertLayers)) $
-            =
-            filter (not . isFullyConnected) newVertLayers --remove fully connected vertical layers
-          | otherwise -- Debug.Trace.trace ("fil2 "++ show (filter (not . isFullyConnected) newVertLayers)) $
-            =
-            filter (not . isFullyConnected) newVertLayers --remove fully connected vertical layers
-            --        fullyConnectedVertNodes = concat (map fst (filter isFullyConnectedAndNotArg newVertLayers))
-        fullyConnectedVertNodes2 = concatMap sel1 (filter isFullyConnected newVertLayers)
-        --        isFullyConnectedAndNotArg (someLayer,unconnectedChildren) = Debug.Trace.trace ("isfully "++ show (null unconnectedChildren, map (isMainFunctionArg g) someLayer)) $
-        --                                                                    null unconnectedChildren &&
-        --                                                                    not (or (map (isMainFunctionArg g) someLayer))
+        fil | not (null newCurLayer) = -- Debug.Trace.trace ("fil0 "++ show (newVertLayers)) $
+                                       filter (not . changed) newVertLayers
+            | not (null fullyConnectedVertNodes) = -- Debug.Trace.trace ("fil1 "++ show (filter (not . isFullyConnected) newVertLayers)) $
+                                                    filter (not . isFullyConnected) newVertLayers --remove fully connected vertical layers
+            | otherwise = -- Debug.Trace.trace ("fil2 "++ show (filter (not . isFullyConnected) newVertLayers)) $
+                                                    filter (not . isFullyConnected) newVertLayers --remove fully connected vertical layers
+--        fullyConnectedVertNodes = concat (map fst (filter isFullyConnectedAndNotArg newVertLayers))
+        fullyConnectedVertNodes = concatMap sel1 (filter isFullyConnected newVertLayers)
+--        isFullyConnectedAndNotArg (someLayer,unconnectedChildren) = Debug.Trace.trace ("isfully "++ show (null unconnectedChildren, map (isMainFunctionArg g) someLayer)) $
+--                                                                    null unconnectedChildren &&
+--                                                                    not (or (map (isMainFunctionArg g) someLayer))
 
-        isFullyConnected (_someLayer, unconnectedChildren, _) = null unconnectedChildren
+        isFullyConnected (someLayer,unconnectedChildren,_) = null unconnectedChildren
 
-        newCurLayer =
-          -- Debug.Trace.trace ("curParents"++ show (layerParents curLayer, filter shouldNodeBeAdded (layerParents curLayer))) $
-          myNub (filter shouldNodeBeAdded (layerParents curLayer)) ++ concatMap sel1 (filter changed newVertLayers)
-        changed (_, _, b) = b
+        newCurLayer = -- Debug.Trace.trace ("curParents"++ show (layerParents curLayer, filter shouldNodeBeAdded (layerParents curLayer))) $
+                      (myNub (filter shouldNodeBeAdded (layerParents curLayer))) ++
+                      (concatMap sel1 (filter changed newVertLayers)) ++
+                      (concatMap pickFirstLayer activeSubgraphLayers)
+
+        pickFirstLayer :: [[UINode]] -> [UINode]
+        pickFirstLayer graphLayers = map head (filter (not . null) graphLayers)
+        changed (_,_,b) = b
         layerParents l = VU.toList (VU.concatMap (parentsNoVertical g) (VU.fromList l))
         newCurLayerOrVert
-          | not (null newCurLayer) -- Debug.Trace.trace "not (null newCurLayer)" $ --prefer normal nodes to vertical nodes
-            =
-            myNub newCurLayer
-          | not (null fullyConnectedVertNodes2) -- Debug.Trace.trace "not (null fullyConnectedVertNodes2)" $ --if no normal nodes are left
-            =
-            myNub fullyConnectedVertNodes2
-          | otherwise = []
-        shouldNodeBeAdded :: UINode -> Bool -- have all children been added, then node should be added
-        shouldNodeBeAdded node
-          | VU.null chs -- Debug.Trace.trace ("should0 "++ show (node, chs, VU.map isChildUsed chs)) $
-            =
-            False
-          | otherwise -- Debug.Trace.trace ("should1 "++ show (node, chs, VU.map isChildUsed chs)) $
-            =
-            VU.and (VU.map isChildUsed chs)
-              && not (isInVertLayer node)
-          where
-            chs = childrenNoVertical g node
-            isChildUsed :: UINode -> Bool
-            isChildUsed child = child `elem` (usedNodes ++ curLayer)
-            isInVertLayer :: UINode -> Bool
-            isInVertLayer n = any (elem n . sel1) vertLayers
+            | not (null newCurLayer) = -- Debug.Trace.trace "not (null newCurLayer)" $ --prefer normal nodes to vertical nodes
+                                       myNub newCurLayer
+            | not (null fullyConnectedVertNodes) = -- Debug.Trace.trace "not (null fullyConnectedVertNodes2)" $ --if no normal nodes are left
+                                                   myNub fullyConnectedVertNodes
+            | otherwise = -- Debug.Trace.trace "newCurLayerOrVert2" $
+                          []
+
+        -- | Have all children been added, then node should be added
+        shouldNodeBeAdded :: UINode -> Bool
+        shouldNodeBeAdded node | VU.null chs = -- Debug.Trace.trace ("should0 "++ show (node, chs, VU.map isChildUsed chs)) $
+                                               False
+                               | otherwise = -- Debug.Trace.trace ("should1 "++ show (node, chs, VU.map isChildUsed chs)) $
+                                             VU.and (VU.map isChildUsed chs) &&
+                                             (not (isInVertLayer node))
+          where chs = childrenNoVertical g node
+                isChildUsed :: UINode -> Bool
+                isChildUsed child = elem child (usedNodes ++ curLayer)
+                isInVertLayer :: UINode -> Bool
+                isInVertLayer n = or (map ((elem n). sel1) vertLayers)
+
+        myTail ls | null ls = []
+                  | otherwise = tail ls
+
+    newActiveSubgraphs :: [UINode] -> [[[UINode]]]
+    newActiveSubgraphs nodes = Debug.Trace.trace ("newActiveSubgraphs" ++ show (nodes, concatMap matchingSubgraph nodes, subgraphs))
+                               [] -- concatMap matchingSubgraph nodes -- O(n²), but nobody will explode more than 10 subgraphs
+      where matchingSubgraph :: UINode -> [[[UINode]]]
+            matchingSubgraph node = map (snd . subgraph) (filter sameNode subgraphs)
+              where sameNode (LayoutedSubgraph n gr) = elem node n -- n should have only 1 element
+
+sel1 (x,y,z) = x
+sel2 (x,y,z) = y
+
+
+verticalLayers g = -- Debug.Trace.trace (show ("verticalLayers", VU.toList optionNodes, vLayers (VU.toList optionNodes))) $
+                   vLayers (VU.toList optionNodes)
+  where (_, optionNodes) = partitionNodes g ns -- nonOptionNodes
+        ns = VU.map fromIntegral (VU.fromList (nodes g))
+        vLayers [] = []
+        vLayers (n:ns1) = -- Debug.Trace.trace (show ("vLayers", n, newLayer, addUnconnectedChildren newLayer)) $
+                          (addUnconnectedChildren newLayer): (vLayers (ns1 \\ newLayer))
+          where newLayer = sort $ verticallyConnectedNodes g n
+                addUnconnectedChildren :: [UINode] -> ([UINode],UnconnectedChildren,Bool)
+                addUnconnectedChildren layer1 = (layer1, myNub $ VU.toList (VU.concat (map nonVertChildren layer1)), False)
+                nonVertChildren node = childrenNoVertical g node
+
+
+nodesWithoutChildrenVertLayer :: (NodeClass n, EdgeClass e) => CGraph n e -> VU.Vector UINode
+nodesWithoutChildrenVertLayer g = -- Debug.Trace.trace ("nwcvl "++ show (nodesWithoutChildren, nwcvl))
+                                  nwcvl
+  where nwcvl = VU.concatMap (findLayers (map sel1 (verticalLayers g))) nodesWithoutChildren
+        nodesWithoutChildren = VU.filter (\n -> not (isDummy g n) && VU.null (cs n)) ns
+        cs node = Graph.children g node [dummyEdge Nothing 0]
+        ns = VU.map fromIntegral (VU.fromList (nodes g))
+        (_, optionNodes) = partitionNodes g ns
+        findLayers :: [[UINode]] -> UINode -> VU.Vector UINode
+        findLayers ls n | null ls = VU.singleton n
+                        | otherwise = VU.fromList (concat (map findL ls))
+          where findL l | elem n l = l
+                        | otherwise = [n]
+
 
 -- Some functions don't have an input (e.g. True).
 -- But a function without input can only appear directly after a case node
 -- That's why we insert a connection node between this case node and the function node
-addMissingInputNodes :: (NodeClass n, Show n, EdgeClass e) => CGraph n e -> CGraph n e
+addMissingInputNodes :: (NodeClass n, Show n, Show e, EdgeClass e) => CGraph n e -> CGraph n e
 addMissingInputNodes graph =
   -- Debug.Trace.trace ("\naddConnectionNodes"++ show (foldl addConnNode graph (map fromIntegral (nodes graph)))) $
   foldl addConnNode graph (map fromIntegral (nodes graph))
@@ -1060,10 +1169,8 @@ addMissingInputNodes graph =
     addConnNode :: (NodeClass n, Show n, EdgeClass e) => CGraph n e -> UINode -> CGraph n e
     addConnNode g n
       | VU.null ps = g
-      | isFunction graph n =
-        --        && isCase graph (vhead 501 ps) -- Debug.Trace.trace ("caseconn"++ show (n, VU.head ps)) $
-
-        insertConnNode g n (vhead 502 ps) Nothing 0
+      | isFunction graph n && isCase graph (vHead ps) = -- Debug.Trace.trace ("caseconn"++ show (n, vHead 1 ps)) $
+        insertConnNode g n (vHead ps) Nothing 0
       | otherwise = g
       where
         ps = parentsNoVertical graph n
@@ -1080,9 +1187,10 @@ partitionNodes g =
 -- coffmanGrahamAlgo :: Graph -> [[Int]]
 -- coffmanGrahamAlgo g =
 
+vHead = VU.head
+
 addConnectionVertices :: (NodeClass n, Show n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
 addConnectionVertices (g, ls) =
-  -- Debug.Trace.trace ("acv"++ show (ls, addConnectionVs (g,ls))) $
   addConnectionVs (g, ls)
 
 addConnectionVs :: (NodeClass n, Show n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
@@ -1104,7 +1212,7 @@ addConnectionVs (graph, l0 : l1 : layers) = (fst adv, l0 : (snd adv))
         ps = parentsNoVertical graph n
         isNotInLayerL1 = not . (`elem` l1)
         chans = map (\e -> maybe (Nothing, 0) f e) edges
-        f x = (channelNrIn (myhead 71 x), channelNrOut (myhead 72 x))
+        f x = (channelNrIn (myHead 74 x), channelNrOut (myHead 75 x))
         edges = map (`lue` n) notInLayerL1Parents
         lue x y = Graph.lookupEdge (x, y) graph
 
@@ -1133,13 +1241,33 @@ insertConnNode graph from to chanIn chanOut =
 
 -- UIEdge 2 1 "" Curly "#ff5863" "" i False False]
 
-crossingReduction :: (NodeClass n, Show n, EdgeClass e, Show e) => Int -> Bool -> (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
-crossingReduction i longestP (graph, layers)
+
+-- | To prevent crossing reduction from changing the order of vertically connected nodes
+--   we insert them in the right order again
+arrangeMetaNodes :: (NodeClass n, Show n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
+arrangeMetaNodes (graph, layers) =
+  -- Debug.Trace.trace ("arrangeMetaNodes"++ show layers ++ "\n" ++ show newLayers ++ "\n" ++ show graph)
+                                   (graph, newLayers)
+  where
+    newLayers = map oneLayer layers
+    oneLayer :: [UINode] -> [UINode]
+    oneLayer ls | null metaNodes = ls
+                | otherwise = (ls \\ metaNodes) ++ metaNodes
+      where metaNodes = filter (\n -> isMetaNode graph n) ls
+
+isMetaNode :: (NodeClass n, EdgeClass e, Show n) => CGraph n e -> UINode -> Bool
+isMetaNode g node = maybe False isMetaLabel (Graph.lookupNode node g)
+
+isMetaLabel _ = False
+
+
+crossingReduction :: (NodeClass n, Show n, EdgeClass e, Show e) => Int -> Bool -> [LayoutedSubgraph n e] -> (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
+crossingReduction i longestP subgraphs (graph, layers)
   | i > 0 -- Debug.Trace.trace ("crossingReduction\nlayers    " ++ show layers ++
   --         "\nc         "++ show c ++
   --         "\nnewlayers "++ show newLayers) $
     =
-    crossingReduction (i - 1) longestP (graph, newLayers)
+    crossingReduction (i - 1) longestP subgraphs (graph, newLayers)
   | otherwise = (graph, layers)
   where
     -- nodes that are at the center of attention
@@ -1251,7 +1379,7 @@ edgesEnum en0 en1 gr dir l0 = catMaybes edges
         t = IM.lookup (fromIntegral tgt) e1
         chanNr
           | isJust lu && null (myFromJust 519 lu) = 0
-          | isJust lu = channelNrOut (myhead 73 (myFromJust 520 lu))
+          | isJust lu = channelNrOut (myHead 76 (myFromJust 520 lu))
           | otherwise = 0
         lu = Graph.lookupEdge (tgt, src) gr
 
@@ -1265,7 +1393,7 @@ edgesEnum en0 en1 gr dir l0 = catMaybes edges
 -- type YPos = Int
 -- type YNode = (YPos,Channel,UINode,IsDummy)
 
-isNotMainFunctionArg :: NodeClass n => CGraph n e -> UINode -> Bool
+isNotMainFunctionArg :: (NodeClass n, EdgeClass e) => CGraph n e -> UINode -> Bool
 isNotMainFunctionArg g node =
   -- not (maybe False isMainArg (Graph.lookupNode node g))
   not (isMainArg g node)
@@ -1286,52 +1414,56 @@ barycenter g dir l0 l1 _ =
         lenPs = VU.length ps
         cs = VU.map fromIntegral (childrenNoVertical g (fromIntegral node))
         ps = VU.map fromIntegral (parentsNoVertical g (fromIntegral node))
+        size = fromIntegral (length (Graph.nodes g))
         nodeWeight :: Dir -> Double
         nodeWeight LeftToRight
           | isJust vertNum -- Debug.Trace.trace ("bvert lr "++ show vertNum)
-            =
-            (fromIntegral (myFromJust 521 vertNum)) + (if VU.null cs then 0 else (subPos (VU.head cs)) * 10000)
+            = if lenCs == 0
+                then ((VU.sum (VU.map xpos cs)) / (fromIntegral lenCs)) + vertFrac + subPos cs
+                else ((VU.sum (VU.map xpos ps)) / (fromIntegral lenPs)) + vertFrac + subPos cs
           | lenCs == 0 =
-            -- Debug.Trace.trace "bry -1"
-            (-1)
+            -- Debug.Trace.trace ("bry -1 " ++ show (node, lenPs, lenCs, (VU.sum (VU.map xpos ps)) / (fromIntegral lenPs)))$
+            ((VU.sum (VU.map xpos ps)) / (fromIntegral lenPs)) + subPos cs
           --                | node == prioNode = -2
           | otherwise =
             -- Debug.Trace.trace ("bsum lr "++ show (VU.map xpos cs)) $
-            ((VU.sum (VU.map xpos cs)) / (fromIntegral lenCs)) + (if VU.null cs then 0 else (subPos (VU.head cs)) * 10000)
+            ((VU.sum (VU.map xpos cs)) / (fromIntegral lenCs)) + subPos cs
         nodeWeight RightToLeft
-          | isJust vertNum =
-            -- Debug.Trace.trace ("bvert rl "++ show vertNum)
-            (fromIntegral (myFromJust 522 vertNum)) + (if VU.null cs then 0 else (subPos (VU.head cs)) * 10000)
-          | lenPs == 0 -- Debug.Trace.trace "bry -1"
-            =
-            (-1)
+          | isJust vertNum
+            = if lenCs == 0
+                then ((VU.sum (VU.map xpos ps)) / (fromIntegral lenPs)) + vertFrac + subPos cs
+                else ((VU.sum (VU.map xpos cs)) / (fromIntegral lenCs)) + vertFrac + subPos cs
+          | lenPs == 0
+            = -- Debug.Trace.trace ("bry -1# " ++ show (node, lenPs, lenCs, (VU.sum (VU.map xpos cs)) / (fromIntegral lenCs)))$
+            ((VU.sum (VU.map xpos cs)) / (fromIntegral lenCs)) + subPos cs
           --                | node == prioNode = -2
           | otherwise -- Debug.Trace.trace ("bsum rl "++ show (VU.map xpos ps)) $
             =
-            ((VU.sum (VU.map xpos ps)) / (fromIntegral lenPs)) + (if VU.null cs then 0 else (subPos (VU.head cs)) * 10000)
+            ((VU.sum (VU.map xpos ps)) / (fromIntegral lenPs)) + subPos cs
 
         lu = Graph.lookupNode (fromIntegral node) g
         vertNum = maybe Nothing Common.verticalNumber lu
+        vertFrac = fromIntegral ((myFromJust 521 vertNum)) / size
         xpos :: Int -> Double
         xpos c =
           -- Debug.Trace.trace (show (c, l0,maybe 0 fromIntegral (elemIndex c l0), subPos c)) $
           (maybe 0 fromIntegral (elemIndex c l0))
 
-        subPos :: Int -> Double
-        subPos c =
-          -- Debug.Trace.trace (show channel ++ " : " ++ show channels) $
-          (fromIntegral channel) / (fromIntegral channels)
+        subPos :: VU.Vector Int -> Double
+        subPos cs | VU.null cs = 1
+                  | otherwise = -- Debug.Trace.trace (show channel ++ " : " ++ show channels) $
+                                (fromIntegral channel) / (fromIntegral channels)
           where
             channel = maybe 0 channelNrOut edgeLabel
-            channels = maybe 1 nrTypes (Graph.lookupNode (fromIntegral c) g)
+            channels = maybe 1 nrTypes (Graph.lookupNode (fromIntegral (vHead cs)) g)
             nrTypes x
               | isSubLabel x = subLabels x
               | otherwise = 1
             edgeLabel
               | isNothing (Graph.lookupEdge dEdge g) = Nothing
               | null (myFromJust 523 (Graph.lookupEdge dEdge g)) = Nothing
-              | otherwise = fmap (myhead 74) (Graph.lookupEdge dEdge g)
-            dEdge = (fromIntegral node, fromIntegral c)
+              | otherwise = fmap (myHead 77) (Graph.lookupEdge dEdge g)
+            dEdge = (fromIntegral node, fromIntegral (vHead cs))
 
 -- Assign every node in l0 a number thats the median of its neighbours in l1, then sort
 median :: EdgeClass e => CGraph n e -> [Int] -> [Int] -> [Int]
@@ -1422,57 +1554,3 @@ fromAdj nodesMap adj = foldl (newNodes nodesMap) Graph.empty adj
         edges = zip es edgeLbls
         es = map (n,) ns
         edgeLbls = repeat eLabel
-
-------------------------------------------------------------------------------------------------------------------------------
-
--- | To be able to jump vertically between nodes in an interactive ui
-getColumns :: EdgeClass e => CGraphL n e -> (Map X [UINode], Map.Map Int [Column])
-getColumns (gr, m) = (Map.fromList cols, Map.fromList (zip [0 ..] (divideTables cols)))
-  where
-    cols =
-      map
-        tupleWithX
-        ( ( (map (sortBy sorty))
-              . (groupBy groupx)
-              . (sortBy sortx)
-          )
-            (map fromIntegral (Graph.nodes gr))
-        )
-    tupleWithX :: [UINode] -> (X, [UINode])
-    tupleWithX ls = (maybe 0 fst (Map.lookup (myhead 504 ls) m), ls)
-    groupx n0 n1 = maybe 0 fst (Map.lookup n0 m) == maybe 0 fst (Map.lookup n1 m)
-    sortx n0 n1 = compare (maybe 0 fst (Map.lookup n0 m)) (maybe 0 fst (Map.lookup n1 m))
-    sorty n0 n1 = compare (maybe 0 snd (Map.lookup n0 m)) (maybe 0 snd (Map.lookup n1 m))
-
-    -- There can be several graphs on the screen that are connected with separating edges
-    divideTables :: [Column] -> [[Column]]
-    divideTables [] = []
-    divideTables layers = layersWithoutSep : divideTables rest
-      where
-        (layersWithoutSep, rest) = sumLayers ([], layers)
-        sumLayers :: ([Column], [Column]) -> ([Column], [Column])
-        sumLayers (s, []) = (s, [])
-        sumLayers (s, l : ls)
-          | containsSeparatingEdge (snd l) = (s ++ [l], ls)
-          | otherwise = sumLayers (s ++ [l], ls)
-        containsSeparatingEdge ns = any cs ns
-        cs n = VU.length (childrenSeparating gr n) > 0
-
--- | To be able to jump horizontally between nodes in an interactive ui
-getRows :: CGraphL n e -> Map Y [UINode]
-getRows (gr, m) =
-  Map.fromList $
-    map
-      tupleWithY
-      ( ( (map (sortBy sortx))
-            . (groupBy groupy)
-            . (sortBy sorty)
-        )
-          (map fromIntegral (Graph.nodes gr))
-      )
-  where
-    tupleWithY :: [UINode] -> (Y, [UINode])
-    tupleWithY ls = (maybe 0 snd (Map.lookup (myhead 504 ls) m), ls)
-    groupy n0 n1 = maybe 0 snd (Map.lookup n0 m) == maybe 0 snd (Map.lookup n1 m)
-    sortx n0 n1 = compare (maybe 0 fst (Map.lookup n0 m)) (maybe 0 fst (Map.lookup n1 m))
-    sorty n0 n1 = compare (maybe 0 snd (Map.lookup n0 m)) (maybe 0 snd (Map.lookup n1 m))

@@ -97,6 +97,11 @@ myHead i a
   | null a = error ("head: empty list " ++ show i)
   | otherwise = head a
 
+myLast :: Int -> [a] -> a
+myLast i a
+  | null a = error ("last: empty list " ++ show i)
+  | otherwise = last a
+
 vHead :: (VU.Unbox a) => Int -> VU.Vector a -> a
 vHead i a
   | VU.null a = error ("VU.head: empty list " ++ show i)

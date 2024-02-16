@@ -5,13 +5,15 @@ Sugiyama-style graph drawing: https://en.wikipedia.org/wiki/Layered_graph_drawin
 [An Efficient Implementation of Sugiyama’s
 Algorithm for Layered Graph Drawing](https://www.elibm.org/ft/10011396000)
 
-## Sugyama consists of several steps:
+## Sugiyama consists of several steps:
 
 Starting with
 
 1. A directed graph without cycles
 
 ![Initial graph](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/graphs/g0.svg)
+
+&nbsp;
 
 2. Find the longest path and add connection vertices
 
@@ -20,16 +22,23 @@ If a connection line passes over several layers, a node has to be added in every
 
 ![Longest path](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/graphs/g1.svg)
 
+&nbsp;
+
 3. Crossing Reduction
 
 Using: [Simple and Eﬃcient Bilayer Cross Counting](http://ls11-www.cs.tu-dortmund.de/downloads/papers/BJM04.pdf)
 
 ![Crossing reduction](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/graphs/g2.svg)
 
+&nbsp;
+
 4. Y-placement (works, but is not an average of alignments)
 
 Using: [Fast and Simple Horizontal Coordinate Assignment](https://kops.uni-konstanz.de/server/api/core/bitstreams/e3f1cd1e-3fd4-422d-852e-77404160f664/content)
+
 ![y placement](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/graphs/g3.svg)
+
+&nbsp;
 
 ## Algorithm extensions (vertical and virtual edges, sub fields)
 

@@ -34,8 +34,11 @@ import           Graph.CommonGraph
     EdgeType (NormalEdge),
     GraphMoveX,
     LayerFeatures (LayerFeatures, layer),
+    Nesting,
     NodeClass (connectionNode, dummyNode, isConnNode, isDummy, isMainArg, isSubLabel, subLabels, nestingFeatures),
     UINode,
+    X,
+    Y,
     childrenNoVertical,
     childrenSeparating,
     childrenVertical,
@@ -55,6 +58,10 @@ import           Graph.IntMap (Graph (..), nodes)
 import qualified Graph.IntMap as Graph
 import           Graph.SubGraphWindows (subgraphWindows, getRows, getColumns, LayoutedSubgraph(..), ShowGraph)
 import           Debug.Trace (trace)
+
+------------------------------------------------------------------------------------------------------
+-- * Main interface
+--   
 
 -- | Also returns a map with Columns to allow navigation with arrows
 layeredGraphAndCols ::
@@ -79,7 +86,6 @@ layeredGraphWithSub cross graph = Debug.Trace.trace (show("deepestNesting", deep
         layoutedSubGraphs = Map.empty
 
 type ID = Int
-type Nesting = Int
 type ParentGraphOf = Map ID [ID] -- children of parent
 
 -- | Nestings of graphs have to be layouted by layouting the deepest graphs, an then embedding it into its parent graph
@@ -218,14 +224,11 @@ layeredGraph cross graph subgraphs =
       )
         graph
 
-fr :: (Int, n) -> (UINode, n)
-fr (n, nl) = (fromIntegral n, nl)
+------------------------------------------------------------------------------------------------------
+-- * Y coordinate assignment
+--
 
-graphvizNodes :: (CGraph n e, Map.Map Int [Column]) -> String
-graphvizNodes (gr, m) = concatMap ((++ "\n") . sh) (I.toList (Graph.nodeLabels gr))
-  where
-    sh (n, _nl) = show n ++ " [ pos = \"" ++ show (myFromJust 499 $ Map.lookup n m) ++ "!\"]"
-
+-- | No spaces between the nodes. This is good for testing purposes, because it is simple
 primitiveYCoordinateAssignement :: (CGraph n e, [[UINode]]) -> CGraphL n e
 primitiveYCoordinateAssignement (graph, layers) =
       -- Debug.Trace.trace ("primitiveY1 "++ show (layers,ns)) $
@@ -279,8 +282,7 @@ positionNode graph (x,y,n) =
     where lu = Graph.lookupNode n graph
 -}
 
--- ^ See "Fast and Simple Horizontal Coordinate Assignment" (Brandes, Köpf)
-
+-- | See "Fast and Simple Horizontal Coordinate Assignment" (Brandes, Köpf)
 yCoordinateAssignement :: (NodeClass n, EdgeClass e) => (CGraph n e, [[UINode]]) -> (CGraphL n e, [[UINode]])
 yCoordinateAssignement (graph, layers) =
   -- Debug.Trace.trace ("\nyCoordAssign "++ show (layers,graph,pos)) $
@@ -348,10 +350,6 @@ horizontalBalancing lu _ld _ru _rd =
 --        f (n0,(x0,y0)) (n1,(x1,y1)) | n0 /= n1 = error "horizontalBalancing n0 /= n1 "
 --                                    | otherwise = (n0, (x0, (y0+y1) `div` 2 ))
 
-type X = Int
-
-type Y = Int
-
 type YN = (Y, (UINode, Bool))
 
 data MYN
@@ -361,6 +359,28 @@ data MYN
   deriving (Eq, Ord, Show) -- an even number of connections has two medians
 
 type Median = Map UINode MYN
+
+toYN :: Bool -> (MYN, MYN) -> ((Y, (UINode, Bool)), (Y, (UINode, Bool)))
+toYN left (n0, n1) = (getYN left n0, getYN left n1)
+
+getYN :: Bool -> MYN -> (Y, (UINode, Bool))
+getYN _ (Single (y, (n, b))) = (y, (n, b))
+getYN _ (Middle (y, (n, b))) = (y, (n, b))
+getYN left (UpLowMedian (y0, (n0, b0)) (y1, (n1, b1)))
+  | left = (y0, (n0, b0))
+  | otherwise = (y1, (n1, b1))
+
+getY :: Bool -> MYN -> Y
+getY _ (Single (y, _)) = y
+getY _ (Middle (y, _)) = y
+getY left (UpLowMedian (y0, (_n0, _b0)) (y1, (_n1, _b1)))
+  | left = y0
+  | otherwise = y1
+
+getN :: MYN -> [UINode]
+getN (Single (_y, (n, _b))) = [n]
+getN (Middle (_y, (n, _b))) = [n]
+getN (UpLowMedian (_y0, (n0, _b0)) (_y1, (n1, _b1))) = [n0, n1]
 
 biasedAlignment ::
   (NodeClass n, EdgeClass e) =>
@@ -437,10 +457,6 @@ biasedAlignment graph _ medians layers dir =
 
 toNode :: ((a1, (a2, b1)), (a3, (b2, b3))) -> (a2, b2)
 toNode ((_, (n0, _)), (_, (n1, _))) = (n0, n1)
-
-tuples :: [a] -> [(a, a)]
-tuples (x : y : xs) = (x, y) : tuples (y : xs)
-tuples _ = []
 
 type Insp = (Map Int (MYN, MYN), Map Int (MYN, MYN))
 
@@ -581,8 +597,6 @@ resolveConflicts (left, up) es =
   -- Debug.Trace.trace ("resolveConflicts"++ show (es, resolveConfs (left,up) es 0)) $
   map (toYN left) (resolveConfs (left, up) es 0)
 
-toYN :: Bool -> (MYN, MYN) -> ((Y, (UINode, Bool)), (Y, (UINode, Bool)))
-toYN left (n0, n1) = (getYN left n0, getYN left n1)
 
 -- | Compare all edges of a layer with each other. Worst case: O(n²).
 -- But n can shrink fast in every round and n is small, because of sweepForIndependentEdgeLists
@@ -728,43 +742,8 @@ cases left (n0, n1) (n2, n3)
         =
         False
 
-getYN :: Bool -> MYN -> (Y, (UINode, Bool))
-getYN _ (Single (y, (n, b))) = (y, (n, b))
-getYN _ (Middle (y, (n, b))) = (y, (n, b))
-getYN left (UpLowMedian (y0, (n0, b0)) (y1, (n1, b1)))
-  | left = (y0, (n0, b0))
-  | otherwise = (y1, (n1, b1))
 
-getY :: Bool -> MYN -> Y
-getY _ (Single (y, _)) = y
-getY _ (Middle (y, _)) = y
-getY left (UpLowMedian (y0, (_n0, _b0)) (y1, (_n1, _b1)))
-  | left = y0
-  | otherwise = y1
-
-getN :: MYN -> [UINode]
-getN (Single (_y, (n, _b))) = [n]
-getN (Middle (_y, (n, _b))) = [n]
-getN (UpLowMedian (_y0, (n0, _b0)) (_y1, (n1, _b1))) = [n0, n1]
-
-ranksame :: [[UINode]] -> String
-ranksame ls = "{ rank=same; " ++ intercalate "," (map show ls) ++ " }\n"
-
-col :: Int -> UINode -> String
-col i n = show n ++ " " ++ c (i `mod` 5) ++ "\n"
-  where
-    c m
-      | m == 0 = "[color = red" ++ width
-      | m == 1 = "[color = green" ++ width
-      | m == 2 = "[color = blue" ++ width
-      | m == 3 = "[color = yellow" ++ width
-      | m == 4 = "[color = turquoise" ++ width
-    c _ = "[color = black" ++ width
-    width = ",penwidth=" ++ show (1 + (i `div` 2)) ++ "]"
-
---------------------------------------------------------------------------------------------------------------------
-
--- Similar to Brandes-Köpf but without arrays and no placement of blocks
+-- | Similar to Brandes-Köpf but without arrays and no placement of blocks
 -- The basic algorithm is longest path.
 -- debugging can be done with graphviz, also uncomment line 533 in longestPath | otherwise
 align :: EdgeClass e => CGraph n e -> [[UINode]] -> [(UINode, UINode)] -> (Bool, Bool) -> Map UINode (Int, Int)
@@ -958,76 +937,8 @@ align graph layers edges (_alignLeft, _up) =
       where
         adj b mp = Map.adjust (\(x, _y) -> (x, newY)) b mp
 
----------------------------------------------------------------------------------------------------------
-
--- The idea behind the following heuristic:
--- Very frequent chaining of functions are obvious and need no attention, e.g. Data.Text.pack str
--- unusual chainings need the highest attention
--- a long path means it is the main path of activity, like a table of contents in a book that
--- is a guide where to go. This long path should be a straight line at the top of the page.
-
--- Sort nodes in the layers by:
---   Finding the longest path with the most infrequent connections, make these nodes appear
---   first (y=0) use dfs to find the second longest/infrequent path
--- longestinfrequentPaths :: CGraph -> [[Node]] -> [Node]
-
-type YNode = (YPos, Channel, UINode, IsDummy)
-
-type YPos = Word32
-
-type IsDummy = Bool
-
-data Dir = LeftToRight | RightToLeft deriving (Show)
-
-leftToRight :: Dir -> Bool
-leftToRight LeftToRight = True
-leftToRight RightToLeft = False
-
-longestinfrequentPaths :: EdgeClass e => NodeClass n => CGraph n e -> [[UINode]] -> Vector Int
-longestinfrequentPaths _ [] = VU.empty
-longestinfrequentPaths _ [_] = VU.empty
-longestinfrequentPaths g (l0 : l1 : layers)
-  | null r = VU.empty
-  | otherwise = VU.take (length layers + 2) $ myHead 68 r
-  where
-    r = map (liPaths g (l1 : layers) []) (startNodes g l0 l1)
-
-startNodes :: EdgeClass e => CGraph n e -> [Word32] -> [Word32] -> [Word32]
-startNodes g l0 l1 = mapMaybe (nodeWithChildInLayer l1) l0
-  where
-    nodeWithChildInLayer layer1 node
-      | VU.null $
-          VU.filter
-            (`elem` layer1)
-            (childrenNoVertical g node) =
-        Nothing
-      | otherwise = Just node
-
-liPaths :: EdgeClass e => NodeClass n => CGraph n e -> [[UINode]] -> [UINode] -> UINode -> Vector Int
-liPaths _ [] ns node = VU.fromList (map fromIntegral (node : ns))
-liPaths g (l0 : layers) ns node = VU.concatMap (liPaths g layers (node : ns)) cs
-  where
-    cs =
-      VU.filter
-        --        (\x -> (maybe False (not . isDummyLabel) (Graph.lookupNode x g)) && elem x l0)
-        (\x -> not (isDummy g x) && elem x l0)
-        (childrenNoVertical g node)
-
-myNub :: Ord a => [a] -> [a]
-myNub = map (myHead 69) . group . sort -- nubOrd
-
-myNub2 :: [(Int, UINode)] -> [(Int, UINode)]
-myNub2 = map (myHead 70) . groupBy nnn . sortBy nn -- nubOrd
-  where
-    nn (_, n0) (_, n1) = compare n0 n1
-    nnn (_, n0) (_, n1) = n0 == n1
-
-type UnconnectedChildren = [UINode]
-
-myTail ls | null ls = []
-          | otherwise = tail ls
-
-type SubgraphLayers = [[[UINode]]] -- several graphs, where each graph has several layers, and a layer is a list of nodes
+-- * Longest Path
+--
 
 -- | Every graph has a longest path, which is the center of attention for us
 -- Return layers of node ids
@@ -1087,6 +998,10 @@ longestPathAlgo subgraphs g = -- Debug.Trace.trace ("\nlongestPathAlgo\n" ++ sho
                         (someLayer, newun, null newun && all (isNotMainFunctionArg g) someLayer)
           where newun = unconnectedChildren \\ curLayer
 
+        isNotMainFunctionArg :: (NodeClass n, EdgeClass e) => CGraph n e -> UINode -> Bool
+        isNotMainFunctionArg g node = -- not (maybe False isMainArg (Graph.lookupNode node g))
+                                      not (isMainArg g node)
+
         fil | not (null newCurLayer) = -- Debug.Trace.trace ("fil0 "++ show (newVertLayers)) $
                                        filter (not . changed) newVertLayers
             | not (null fullyConnectedVertNodes) = -- Debug.Trace.trace ("fil1 "++ show (filter (not . isFullyConnected) newVertLayers)) $
@@ -1141,9 +1056,8 @@ longestPathAlgo subgraphs g = -- Debug.Trace.trace ("\nlongestPathAlgo\n" ++ sho
             matchingSubgraph node = map (snd . subgraph) (filter sameNode subgraphs)
               where sameNode (LayoutedSubgraph n gr) = elem node n -- n should have only 1 element
 
-sel1 (x,y,z) = x
-sel2 (x,y,z) = y
-
+type UnconnectedChildren = [UINode]
+type SubgraphLayers = [[[UINode]]] -- several graphs, where each graph has several layers, and a layer is a list of nodes
 
 verticalLayers g = -- Debug.Trace.trace (show ("verticalLayers", VU.toList optionNodes, vLayers (VU.toList optionNodes))) $
                    vLayers (VU.toList optionNodes)
@@ -1173,7 +1087,22 @@ nodesWithoutChildrenVertLayer g = -- Debug.Trace.trace ("nwcvl "++ show (nodesWi
                         | otherwise = [n]
 
 
--- Some functions don't have an input (e.g. True).
+-- | partition nodes into non-vertically connected nodes and vertically connected nodes
+partitionNodes :: EdgeClass e => CGraph n e -> VU.Vector UINode -> (VU.Vector UINode, VU.Vector UINode)
+partitionNodes g =
+  VU.partition
+    ( \n ->
+        VU.null (parentsVertical g n)
+          && VU.null (childrenVertical g n)
+    )
+
+-- coffmanGrahamAlgo :: Graph -> [[Int]]
+-- coffmanGrahamAlgo g =
+
+------------------------------------------------------------------------------------------------------
+-- * Special needs for function networks
+
+-- | Some functions don't have an input (e.g. True).
 -- But a function without input can only appear directly after a case node
 -- That's why we insert a connection node between this case node and the function node
 addMissingInputNodes :: (NodeClass n, Show n, Show e, EdgeClass e) => CGraph n e -> CGraph n e
@@ -1190,19 +1119,30 @@ addMissingInputNodes graph =
       where
         ps = parentsNoVertical graph n
 
--- | partition nodes into non-vertically connected nodes and vertically connected nodes
-partitionNodes :: EdgeClass e => CGraph n e -> VU.Vector UINode -> (VU.Vector UINode, VU.Vector UINode)
-partitionNodes g =
-  VU.partition
-    ( \n ->
-        VU.null (parentsVertical g n)
-          && VU.null (childrenVertical g n)
-    )
+-- | To prevent crossing reduction from changing the order of vertically connected nodes
+--   we insert them in the right order again
+arrangeMetaNodes :: (NodeClass n, Show n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
+arrangeMetaNodes (graph, layers) =
+  -- Debug.Trace.trace ("arrangeMetaNodes"++ show layers ++ "\n" ++ show newLayers ++ "\n" ++ show graph)
+                                   (graph, newLayers)
+  where
+    newLayers = map oneLayer layers
+    oneLayer :: [UINode] -> [UINode]
+    oneLayer ls | null metaNodes = ls
+                | otherwise = (ls \\ metaNodes) ++ metaNodes
+      where metaNodes = filter (\n -> isMetaNode graph n) ls
 
--- coffmanGrahamAlgo :: Graph -> [[Int]]
--- coffmanGrahamAlgo g =
+    isMetaNode :: (NodeClass n, EdgeClass e, Show n) => CGraph n e -> UINode -> Bool
+    isMetaNode g node = maybe False isMetaLabel (Graph.lookupNode node g)
 
-vHead = VU.head
+    isMetaLabel _ = False
+
+------------------------------------------------------------------------------------------------------
+-- * Add connection vertices
+--
+-- $conn
+--
+-- When a connection line passes several layers, connection nodes have to be added
 
 addConnectionVertices :: (NodeClass n, Show n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
 addConnectionVertices (g, ls) =
@@ -1256,28 +1196,11 @@ insertConnNode graph from to chanIn chanOut =
 
 -- UIEdge 2 1 "" Curly "#ff5863" "" i False False]
 
+------------------------------------------------------------------------------------------------------
+-- * Crossing reduction
+--   
 
--- | To prevent crossing reduction from changing the order of vertically connected nodes
---   we insert them in the right order again
-arrangeMetaNodes :: (NodeClass n, Show n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
-arrangeMetaNodes (graph, layers) =
-  -- Debug.Trace.trace ("arrangeMetaNodes"++ show layers ++ "\n" ++ show newLayers ++ "\n" ++ show graph)
-                                   (graph, newLayers)
-  where
-    newLayers = map oneLayer layers
-    oneLayer :: [UINode] -> [UINode]
-    oneLayer ls | null metaNodes = ls
-                | otherwise = (ls \\ metaNodes) ++ metaNodes
-      where metaNodes = filter (\n -> isMetaNode graph n) ls
-
-isMetaNode :: (NodeClass n, EdgeClass e, Show n) => CGraph n e -> UINode -> Bool
-isMetaNode g node = maybe False isMetaLabel (Graph.lookupNode node g)
-
-isMetaLabel _ = False
-
-listShow :: Show a => [a] -> String
-listShow ls = concatMap ((++ "\n"). show) ls
-
+-- | Crossing reduction is like taking a comb and aligning a chain of nodes from left to right and right to left until it is ordered with as little crossings as possible
 crossingReduction :: (NodeClass n, Show n, EdgeClass e, Show e, Graph.ExtractNodeType n, Enum n) => Int -> Bool -> [LayoutedSubgraph n e] -> (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
 crossingReduction i longestP subgraphs (graph, layers)
   | i > 0 =
@@ -1307,6 +1230,13 @@ crossingReduction i longestP subgraphs (graph, layers)
         (map fromIntegral)
         (crossR graph LeftToRight c priorityNodes longestP subgraphLayers)
 
+data Dir = LeftToRight | RightToLeft deriving (Show)
+
+leftToRight :: Dir -> Bool
+leftToRight LeftToRight = True
+leftToRight RightToLeft = False
+
+-- | One pass right to left and left to right
 crossR :: (NodeClass n, Show n, EdgeClass e, Show e) => CGraph n e -> Dir -> [[Int]] -> [Int] -> Bool -> [[[Int]]] -> [[Int]]
 crossR _ _ [] _ _ _ = []
 crossR g dir (l0 : l1 : layers) (n0 : n1 : ns) longestP subgraphLayers
@@ -1361,7 +1291,7 @@ crossR g dir (l0 : l1 : layers) (n0 : n1 : ns) longestP subgraphLayers
     vertNum n = maybe Nothing Common.verticalNumber (lu n)
 crossR _ _ ls ns _ _ = ls
 
--- arrange vertical nodes directly below each other,
+-- | Arrange vertical nodes directly below each other,
 -- returns Nothing if there are no vertical nodes in this layer
 lv :: EdgeClass e => CGraph n e -> [Int] -> [(Int, Bool)]
 lv _ [] = []
@@ -1388,7 +1318,10 @@ lv g (l : ls) =
       | null n = []
       | otherwise = (fromIntegral (head n)) : (goDown (map fromIntegral $ VU.toList $ childrenVertical g (fromIntegral (head n))))
 
--- type YNode = (YPos,Channel,UINode,IsDummy)
+type YPos = Word32
+type IsDummy = Bool
+type YNode = (YPos, Channel, UINode, IsDummy)
+
 edgesEnum :: (NodeClass n, EdgeClass e, Show e) => IM.IntMap UINode -> IM.IntMap UINode -> CGraph n e -> Dir -> [UINode] -> [(YNode, YNode)]
 edgesEnum en0 en1 gr dir l0 = catMaybes edges
   where
@@ -1418,15 +1351,8 @@ edgesEnum en0 en1 gr dir l0 = catMaybes edges
       | leftToRight dir = map (n,) (VU.toList (parentsNoVertical g n))
       | otherwise = map (n,) (VU.toList (childrenNoVertical g n))
 
--- type YPos = Int
--- type YNode = (YPos,Channel,UINode,IsDummy)
 
-isNotMainFunctionArg :: (NodeClass n, EdgeClass e) => CGraph n e -> UINode -> Bool
-isNotMainFunctionArg g node =
-  -- not (maybe False isMainArg (Graph.lookupNode node g))
-  not (isMainArg g node)
-
--- Assign every node in l1 a number thats the barycenter of its neighbours in l0, then sort.
+-- | Assign every node in l1 a number thats the barycenter of its neighbours in l0, then sort.
 -- If the node is marked as a vertical node with a number, this number has precedence in sorting
 barycenter :: (NodeClass n, Show n, EdgeClass e, Show e) => CGraph n e -> Dir -> [Int] -> [Int] -> Int -> [[Int]] -> [Int]
 barycenter g dir l0 l1 _ subgraphLayers =
@@ -1523,7 +1449,7 @@ median g l0 l1 = map fst $ sortOn snd $ map bc l0
 --TODO: radix sort
 --https://hackage.haskell.org/package/uvector-algorithms-0.2/docs/Data-Array-Vector-Algorithms-Radix.html
 
--- Sort two edges lexicographically after their y-position in the layer
+-- | Sort two edges lexicographically after their y-position in the layer
 -- An edge has two points, each point has a y-position (e.g. e0y0)
 -- and a node number (e.g. e0n0)
 lexicographicSort :: Vector (YNode, YNode) -> VU.Vector (YNode, YNode)
@@ -1544,36 +1470,79 @@ lexicographicSort es = VU.modify (I.sortBy lexicographicOrdering) es
 primitiveInversionCount :: VU.Vector Int -> Int
 primitiveInversionCount xs =
   sum
-    [ if (xs VU.! i) > (xs VU.! j) then 1 else 0 | i <- [0 .. ((VU.length xs) - 1)], j <- [i .. ((VU.length xs) - 1)]
+    [ if (xs VU.! i) > (xs VU.! j) then 1 else 0 | i <- [0 .. (l-1)], j <- [i .. (l-1)]
     ]
+  where l = VU.length xs
 
---  where l = VU.length xs
-
--- Modified merge sort for counting of edge crossings
+-- | Modified merge sort for counting of edge crossings
 -- which is the same as counting inversions (see)
 -- http://www.geeksforgeeks.org/counting-inversions/
-
-merge :: ([Int], Int) -> ([Int], Int) -> ([Int], Int)
-merge ([], _) (ys, inv) = (ys, inv)
-merge (xs, inv) ([], _) = (xs, inv)
-merge (xs@(x : xt), inv0) (ys@(y : yt), inv1)
-  | x <= y = (x : (fst (merge (xt, inv0) (ys, inv1))), inv0 + inv1)
-  | otherwise = (y : (fst (merge (xs, inv0) (yt, inv1))), inv0 + inv1 + length xs)
-
-split :: [a] -> ([a], [a])
-split (x : y : zs) = let (xs, ys) = split zs in (x : xs, y : ys)
-split [x] = ([x], [])
-split [] = ([], [])
-
 mergeSort :: ([Int], Int) -> ([Int], Int)
 mergeSort ([], _) = ([], 0)
 mergeSort ([x], _) = ([x], 0)
 mergeSort (xs, _) =
   let (as, bs) = split xs -- num_inv
    in merge (mergeSort (as, 0)) (mergeSort (bs, 0))
+ where
+  merge :: ([Int], Int) -> ([Int], Int) -> ([Int], Int)
+  merge ([], _) (ys, inv) = (ys, inv)
+  merge (xs, inv) ([], _) = (xs, inv)
+  merge (xs@(x : xt), inv0) (ys@(y : yt), inv1)
+    | x <= y = (x : (fst (merge (xt, inv0) (ys, inv1))), inv0 + inv1)
+    | otherwise = (y : (fst (merge (xs, inv0) (yt, inv1))), inv0 + inv1 + length xs)
 
--- https://hackage.haskell.org/package/splaytree
--- https://hackage.haskell.org/package/TreeStructures-0.0.1/docs/Data-Tree-Splay.html
+  split :: [a] -> ([a], [a])
+  split (x : y : zs) = let (xs, ys) = split zs in (x : xs, y : ys)
+  split [x] = ([x], [])
+  split [] = ([], [])
+
+---------------------------------------------------------------------------------------------------------
+
+-- | The idea behind the following heuristic:
+-- Very frequent chaining of functions are obvious and need no attention, e.g. Data.Text.pack str
+-- unusual chainings need the highest attention
+-- a long path means it is the main path of activity, like a table of contents in a book that
+-- is a guide where to go. This long path should be a straight line at the top of the page.
+
+-- Sort nodes in the layers by:
+--   Finding the longest path with the most infrequent connections, make these nodes appear
+--   first (y=0) use dfs to find the second longest/infrequent path
+longestinfrequentPaths :: EdgeClass e => NodeClass n => CGraph n e -> [[UINode]] -> Vector Int
+longestinfrequentPaths _ [] = VU.empty
+longestinfrequentPaths _ [_] = VU.empty
+longestinfrequentPaths g (l0 : l1 : layers)
+  | null r = VU.empty
+  | otherwise = VU.take (length layers + 2) $ myHead 68 r
+  where
+    r = map (liPaths g (l1 : layers) []) (startNodes g l0 l1)
+
+startNodes :: EdgeClass e => CGraph n e -> [Word32] -> [Word32] -> [Word32]
+startNodes g l0 l1 = mapMaybe (nodeWithChildInLayer l1) l0
+  where
+    nodeWithChildInLayer layer1 node
+      | VU.null $
+          VU.filter
+            (`elem` layer1)
+            (childrenNoVertical g node) =
+        Nothing
+      | otherwise = Just node
+
+liPaths :: EdgeClass e => NodeClass n => CGraph n e -> [[UINode]] -> [UINode] -> UINode -> Vector Int
+liPaths _ [] ns node = VU.fromList (map fromIntegral (node : ns))
+liPaths g (l0 : layers) ns node = VU.concatMap (liPaths g layers (node : ns)) cs
+  where
+    cs =
+      VU.filter
+        --        (\x -> (maybe False (not . isDummyLabel) (Graph.lookupNode x g)) && elem x l0)
+        (\x -> not (isDummy g x) && elem x l0)
+        (childrenNoVertical g node)
+
+------------------------------------------------------------------------------------------------------
+-- * Helper functions
+--   
+
+fr :: (Int, n) -> (UINode, n)
+fr (n, nl) = (fromIntegral n, nl)
 
 fromAdj :: EdgeClass e => Map Word32 nl -> [(Word32, [Word32], [e])] -> Graph nl [e]
 fromAdj nodesMap adj = foldl (newNodes nodesMap) Graph.empty adj
@@ -1594,3 +1563,51 @@ fromAdj nodesMap adj = foldl (newNodes nodesMap) Graph.empty adj
         edges = zip es edgeLbls
         es = map (n,) ns
         edgeLbls = repeat eLabel
+
+myTail ls | null ls = []
+          | otherwise = tail ls
+
+myNub :: Ord a => [a] -> [a]
+myNub = map (myHead 69) . group . sort -- nubOrd
+
+myNub2 :: [(Int, UINode)] -> [(Int, UINode)]
+myNub2 = map (myHead 70) . groupBy nnn . sortBy nn -- nubOrd
+  where
+    nn (_, n0) (_, n1) = compare n0 n1
+    nnn (_, n0) (_, n1) = n0 == n1
+
+sel1 (x,y,z) = x
+sel2 (x,y,z) = y
+
+tuples :: [a] -> [(a, a)]
+tuples (x : y : xs) = (x, y) : tuples (y : xs)
+tuples _ = []
+
+vHead = VU.head
+
+------------------------------------------------------------------------------------------------------
+-- * Debugging
+--   
+
+col :: Int -> UINode -> String
+col i n = show n ++ " " ++ c (i `mod` 5) ++ "\n"
+  where
+    c m
+      | m == 0 = "[color = red" ++ width
+      | m == 1 = "[color = green" ++ width
+      | m == 2 = "[color = blue" ++ width
+      | m == 3 = "[color = yellow" ++ width
+      | m == 4 = "[color = turquoise" ++ width
+    c _ = "[color = black" ++ width
+    width = ",penwidth=" ++ show (1 + (i `div` 2)) ++ "]"
+
+graphvizNodes :: (CGraph n e, Map.Map Int [Column]) -> String
+graphvizNodes (gr, m) = concatMap ((++ "\n") . sh) (I.toList (Graph.nodeLabels gr))
+  where
+    sh (n, _nl) = show n ++ " [ pos = \"" ++ show (myFromJust 499 $ Map.lookup n m) ++ "!\"]"
+
+listShow :: Show a => [a] -> String
+listShow ls = concatMap ((++ "\n"). show) ls
+
+ranksame :: [[UINode]] -> String
+ranksame ls = "{ rank=same; " ++ intercalate "," (map show ls) ++ " }\n"

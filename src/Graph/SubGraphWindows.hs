@@ -214,7 +214,7 @@ subgraphWindows subgraphs ((graph, pos), layers)
         minmax xs
           | null xs = Nothing
           | otherwise = Just (minimum (map fst xs), maximum (map snd xs))
-{-
+
         goLeft p
           | p >= 0 = mm ++ goLeft (p - 1)
           | otherwise = mm
@@ -226,8 +226,8 @@ subgraphWindows subgraphs ((graph, pos), layers)
           | otherwise = mm
           where
             mm = fromMaybe [] (Map.lookup p nspans)
--}
 
+{-
         goLeft p
           | null mm = mm
           | otherwise = mm ++ goLeft (p - 1)
@@ -239,7 +239,7 @@ subgraphWindows subgraphs ((graph, pos), layers)
           | otherwise = mm ++ goRight (p + 1)
           where
             mm = fromMaybe [] (Map.lookup p nspans)
-
+-}
         spansCol = goLeft x ++ goRight (x + 1)
         spansRow = goLeft y ++ goRight (y + 1)
 

@@ -142,6 +142,10 @@ parentsNoVirtual gr n =
   (adjacentNodesByAttr gr False n (Edge8 vertBit))
     VU.++ (adjacentNodesByAttr gr False n (Edge8 0))
 
+-- | All parents that are connected but without the virtual or vertically connected nodes
+parentsNoVerticalOrVirtual :: EdgeClass e => CGraph n e -> Word32 -> VU.Vector Word32
+parentsNoVerticalOrVirtual gr n = adjacentNodesByAttr gr False n (Edge8 0)
+
 -- | Children that are connected vertically
 childrenVertical :: EdgeClass e => Graph n [e] -> Word32 -> VU.Vector Word32
 childrenVertical gr n = adjacentNodesByAttr gr True n (Edge8 vertBit)
@@ -176,8 +180,16 @@ verticallyConnectedNodes g n =
 -- * Borders of cells
 --   Cells have a nesting and border type, when a box has to be drawn around a graph
 
+type Nesting = Int -- the nesting of the window:
+-- 0 -> dummy node
+-- 1 -> not part of a window
+-- 2 -> first window layer
+
+type BoxId = Word32 -- ^ I use the node of the function that is exploded as the box id
+
 data LayerFeatures = LayerFeatures
   { layer :: Nesting, -- ^Graphs that are inside graphs get a higher nesting value (I use this to make every new layer a little bit darker). This is used to calculate the subgraph windows
+    boxId :: Maybe BoxId, -- ^ There can be several subgraphs in a graph, that are surrounded by a box. This value has to be unique for every box
     border :: Maybe Border -- ^Set the css values (border, boxshadow)
   }
   deriving (Show, Generic)
@@ -186,34 +198,32 @@ instance FromJSON LayerFeatures
 
 instance ToJSON LayerFeatures
 
-type Nesting = Int
+lb :: Nesting -> Maybe BoxId -> Maybe LayerFeatures
+lb n b = Just (LayerFeatures n b (Just LeftBorder))
 
-lb :: Int -> Maybe LayerFeatures
-lb n = Just (LayerFeatures n (Just LeftBorder))
+rb :: Nesting -> Maybe BoxId -> Maybe LayerFeatures
+rb n b = Just (LayerFeatures n b (Just RightBorder))
 
-rb :: Int -> Maybe LayerFeatures
-rb n = Just (LayerFeatures n (Just RightBorder))
+tb :: Nesting -> Maybe BoxId -> Maybe LayerFeatures
+tb n b = Just (LayerFeatures n b (Just TopBorder))
 
-tb :: Int -> Maybe LayerFeatures
-tb n = Just (LayerFeatures n (Just TopBorder))
+bb :: Nesting -> Maybe BoxId -> Maybe LayerFeatures
+bb n b = Just (LayerFeatures n b (Just BottomBorder))
 
-bb :: Int -> Maybe LayerFeatures
-bb n = Just (LayerFeatures n (Just BottomBorder))
+ltb :: Nesting -> Maybe BoxId -> Maybe LayerFeatures
+ltb n b = Just (LayerFeatures n b (Just LeftTopBorder))
 
-ltb :: Int -> Maybe LayerFeatures
-ltb n = Just (LayerFeatures n (Just LeftTopBorder))
+rtb :: Nesting -> Maybe BoxId -> Maybe LayerFeatures
+rtb n b = Just (LayerFeatures n b (Just RightTopBorder))
 
-rtb :: Int -> Maybe LayerFeatures
-rtb n = Just (LayerFeatures n (Just RightTopBorder))
+lbb :: Nesting -> Maybe BoxId -> Maybe LayerFeatures
+lbb n b = Just (LayerFeatures n b (Just LeftBottomBorder))
 
-lbb :: Int -> Maybe LayerFeatures
-lbb n = Just (LayerFeatures n (Just LeftBottomBorder))
+rbb :: Nesting -> Maybe BoxId -> Maybe LayerFeatures
+rbb n b = Just (LayerFeatures n b (Just RightBottomBorder))
 
-rbb :: Int -> Maybe LayerFeatures
-rbb n = Just (LayerFeatures n (Just RightBottomBorder))
-
-mid :: Int -> Maybe LayerFeatures
-mid n = Just (LayerFeatures n Nothing)
+mid :: Nesting -> Maybe BoxId -> Maybe LayerFeatures
+mid n b = Just (LayerFeatures n b Nothing)
 
 data Border
   = LeftBorder

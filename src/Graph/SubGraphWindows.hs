@@ -2,7 +2,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE TupleSections #-}
 
-module Graph.SubGraphWindows (subgraphWindows, getColumns, getRows, LayoutedSubgraph(..), ShowGraph, NestMap) where
+module Graph.SubGraphWindows (subgraphWindows, getColumns, getRows, ShowGraph, NestMap) where
 
 import qualified Data.IntMap as I
 import Data.List (groupBy, sortBy, (\\))
@@ -26,18 +26,13 @@ data SpanInOut = Outside | Inside
 type Min = Int
 type Max = Int
 
-data LayoutedSubgraph n e =
-     LayoutedSubgraph { outputNodeSubgraph :: [UINode],
-                        subgraph :: (CGraphL n e, [[UINode]])
-                      } deriving Show
-
 type ShowGraph n e = (Enum n, Graph.ExtractNodeType n, Show n, Show e)
 type NestMap = Map Nesting (Set BoxId) -- ^ boxes/subgraphs in layer
 type RowNodesPartOfBox = (X, [Bool]) -- for every element in the row/column: Is it a box node?
 
 subgraphWindows :: (NodeClass n, EdgeClass e, ShowGraph n e, VU.Unbox UINode) =>
-                   (NestMap, [BoxId],[LayoutedSubgraph n e]) -> (CGraphL n e, [[UINode]]) -> (CGraphL n e, [[UINode]])
-subgraphWindows (nestedGraphs, boxIds,subgraphs) ((graph, pos), layers)
+                   (NestMap, [BoxId]) -> (CGraphL n e, [[UINode]]) -> (CGraphL n e, [[UINode]])
+subgraphWindows (nestedGraphs, boxIds) ((graph, pos), layers)
   | null ns = ((graph, pos), layers)
   | otherwise = -- Debug.Trace.trace ("filledGraph " ++ show filledGraph)
     -- Debug.Trace.trace ("\n\nsubgraphWindows ") -- ++ show (graph,pos,newGraph,normalisedPos) ++"\n") -- ++ -- show newGraph ++"\n"++

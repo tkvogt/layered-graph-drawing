@@ -60,6 +60,3 @@ You can test this library by
  * ```cabal build``` or ```stack build```
  * generate the upper image by executing ```graph-drawing-exe -w 400 -o g3.svg```
  
-## TODO
- * Make graphs inside graphs look better by embedding a layouted graph inside a graph.
-

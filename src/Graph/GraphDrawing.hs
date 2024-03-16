@@ -13,7 +13,7 @@ module Graph.GraphDrawing where
 
 import qualified Data.IntMap as I
 import qualified Data.IntMap.Strict as IM
-import           Data.List (elemIndex, find, group, groupBy, intercalate, sort, sortBy, sortOn, (\\), partition, deleteFirstsBy)
+import           Data.List (elemIndex, find, group, groupBy, intercalate, sort, sortBy, sortOn, (\\), partition, deleteFirstsBy, zip4)
 --import Data.List.Extra (groupOn, nubOrd)
 import           Data.Map (Map)
 import qualified Data.Map as Map
@@ -53,12 +53,12 @@ import           Graph.CommonGraph
     parentsNoVirtual,
     parentsNoVerticalOrVirtual,
     rmdups,
-    verticallyConnectedNodes,
+    verticallyConnectedNodes, updateLayer,
   )
 import qualified Graph.CommonGraph as Common
 import           Graph.IntMap (Graph (..), nodes)
 import qualified Graph.IntMap as Graph
-import           Graph.SubGraphWindows (subgraphWindows, getRows, getColumns, LayoutedSubgraph(..), NestMap, ShowGraph)
+import           Graph.SubGraphWindows (subgraphWindows, getRows, getColumns, NestMap, ShowGraph)
 import           Debug.Trace (trace)
 
 ------------------------------------------------------------------------------------------------------
@@ -78,53 +78,16 @@ layeredGraphAndCols cross graph = (g, getColumns g)
 -- | layered graph drawing with subgraph layouting
 layeredGraphWithSub :: (NodeClass n, EdgeClass e, ShowGraph n e) => VU.Unbox UINode => Bool -> CGraph n e -> CGraphL n e
 layeredGraphWithSub cross graph = -- Debug.Trace.trace (show("deepestNesting", deepestNesting graph)) $
--- ("deepestNesting",(fromList [(1,fromList [759]),(2,fromList [916])],
---                    fromList [(759,fromList [763,769,770,771,772,773,774,776,789,790,791,792,794,801,806,813,818,825,830,837,839,840,852,853,854,863,864,870,871,872,873,878,879,880,881,883,884,885,886,888,889,890,894,895,897,898,899,903,904,905,906,907,908,913,914,915,921,922,925,926,928,929,932,933,935,936]),
---                    (916,fromList [939,944,945,946,947,948,949])],fromList [(759,fromList [916])]))
-                                  subgraphLayouting cross (graph, pos) layoutedSubGraphs z (nestedGraphs, nodesOfBoxId, subgraphs)
-                                  -- fst (layeredGraph cross graph [])
+                                  -- subgraphLayouting cross (graph, pos) layoutedSubGraphs z (nestedGraphs, nodesOfBoxId, subgraphs)
+                                  fst (layeredGraph cross graph (nestedGraphs, Map.keys nodesOfBoxId, parentGraphOf))
   where pos = Map.empty
         layoutedSubGraphs = Map.empty
-        (nestedGraphs, nodesOfBoxId, subgraphs) = deepestNesting graph
+        (nestedGraphs, nodesOfBoxId, parentGraphOf) = deepestNesting graph
         z = fst (Map.findMax nestedGraphs)
 
 type BoxMap = Map BoxId (Set UINode) -- ^ nodes inside the box
-type ParentGraphOf = Map BoxId  -- ^parent
+type ParentGraphOf = Map (Maybe BoxId)  -- ^parent
                          (Set BoxId) -- ^children
-
--- | Nestings of graphs have to be layouted by layouting the deepest graphs, an then embedding it into its parent graph
---   which is then also layouted recursively
---
-subgraphLayouting :: (NodeClass n, EdgeClass e, ShowGraph n e) =>
-                     Bool -> CGraphL n e -> Map BoxId (LayoutedSubgraph n e) -> Nesting -> (NestMap, BoxMap, ParentGraphOf) -> CGraphL n e
-subgraphLayouting cross (completeGraph,pos) layoutedSubGraphs z (nestedGraphs, nodesOfBoxId, subgraphs)
-  | z <= 1 = -- Debug.Trace.trace ("subgraphLayouting0 ") $ -- ++ show (nestedGraphs, fst deepestGraphs, graphsToEmbed) ++ "\nlayoutedSubGraphs\n" ++ show layoutedSubGraphs) $
-             fst (layeredGraph cross completeGraph (nestedGraphs, Map.keys nodesOfBoxId, map snd (Map.toList graphsToEmbed)))
-  | otherwise = -- Debug.Trace.trace ("subgraphLayouting1 ") $ -- ++ show (nodePartitions)) $ -- , graphsToEmbed)) $
-                subgraphLayouting cross (completeGraph,pos) graphsToEmbed (z-1) (nestedGraphs, nodesOfBoxId, subgraphs)
-  where graphsToEmbed = Map.fromList (map layout nodePartitions)
---        layout :: (BoxId, Graph n [e]) -> (BoxId, LayoutedSubgraph n e)
-        layout (idOfSubGraph,gr) = -- Debug.Trace.trace ("pickEmbeddings " ++ show (idOfSubGraph, children)) --, pickEmbeddings, subgraphs) )
-                                   (idOfSubGraph, sub (layeredGraph cross gr (nestedGraphs, Map.keys nodesOfBoxId, pickEmbeddings)))
-          where pickEmbeddings | isJust children = mapMaybe (\n -> Map.lookup n layoutedSubGraphs) (Set.toList (fromJust children))
-                               | otherwise = []
-                children = Map.lookup idOfSubGraph subgraphs
---                sub :: (NodeClass n, EdgeClass e) => (CGraphL n e, [[UINode]]) -> LayoutedSubgraph n e
-                sub gr = LayoutedSubgraph startNode gr
-                  where startNode = rmdups $ VU.toList (nodesWithoutChildrenVertLayer (fst (fst gr)))
-
-        -- Pick the deepest graphs, take the complete graph and for each graph only keep the nodes of this graph
---        nodePartitions :: [(BoxId, Graph n [e])]
-        nodePartitions = map (\(i,ns) -> (i, Graph.deleteNodes [dummyEdge Nothing 0] (nodesToDelete ns) completeGraph)) nodesOfGraphs
-          where nodesToDelete ns = map fromIntegral ((Graph.nodes completeGraph) \\ (map fromIntegral ns))
-                -- | pick the deepest nesting
-                nodesOfGraphs :: [(BoxId, [UINode])]
-                nodesOfGraphs | z <= 1 = []
-                              | otherwise = map (\bid -> (bid, Set.toList (fromMaybe Set.empty (Map.lookup bid nodesOfBoxId))))
-                                                deepestGraphboxIds
-        deepestGraphboxIds = maybe [] Set.toList deepestGraphs
-        deepestGraphs = Map.lookup z nestedGraphs :: Maybe (Set BoxId)
-
 
 -- | Similar to longestPathAlgo, we take the rightmost node (which is an output type node) and explore the graph from there to the left
 --   When a function is exploded the nesting value of every node of this subgraph is increased by one by the explosion (ExplodeImplode.hs).
@@ -155,9 +118,8 @@ deepestNesting gr = -- Debug.Trace.trace (show ("gr", gr, "startNode", startNode
             addBoxNodes = -- Debug.Trace.trace ("addBoxNodes" ++ show (node, lay node, bid node))
                           (maybe boxNodes (\b -> Map.insertWith Set.union b (Set.singleton node) boxNodes) (bid node))
             addParentOf :: ParentGraphOf
-            addParentOf | isJust (bid node) &&
-                          lowerLayers (lay node) (map lay ps) = -- Debug.Trace.trace (show ("bid node", bid node, lay node, "parentBIds", node, ps, map lay ps, parentBIds))
-                                                                Map.insertWith Set.union (fromJust (bid node)) (Set.fromList parentBIds) parentOf
+            addParentOf | lowerLayers (lay node) (map lay ps) = -- Debug.Trace.trace (show ("bid node", bid node, lay node, "parentBIds", node, ps, map lay ps, parentBIds))
+                                                                Map.insertWith Set.union (bid node) (Set.fromList parentBIds) parentOf
                         | otherwise = parentOf
             lowerLayers n ns = any (n <) ns
 
@@ -172,25 +134,31 @@ deepestNesting gr = -- Debug.Trace.trace (show ("gr", gr, "startNode", startNode
 
 layeredGraph ::
   (VU.Unbox UINode, NodeClass n, EdgeClass e, ShowGraph n e) =>
-  Bool -> CGraph n e -> (NestMap, [BoxId],[LayoutedSubgraph n e]) -> (CGraphL n e, [[UINode]]) -- TODO subgraphs
-layeredGraph cross graph subgraphs =
+  Bool -> CGraph n e -> (NestMap, [BoxId], ParentGraphOf) -> (CGraphL n e, [[UINode]]) -- TODO subgraphs
+layeredGraph cross graph (nest, boxids, parentGraphOf) =
 --  Debug.Trace.trace ("layered "++ show (graph,subgraphs) ++"\n") -- ++ showEdges graph ++ show (Graph.edgeLabels graph)) $ -- ++"\nnewGraph\n" ++ show newGraph ++"\n") $
   newGraph
   where
     sortLayers (gr, ls) = (gr, map sort ls) -- makes the dummy vertices appear lower -- TODO don't move layouted nodes
     newGraph =
-      (   subgraphWindows subgraphs .
+      (   subgraphWindows (nest,boxids) .
             yCoordinateAssignement
           -- .
           --  primitiveYCoordinateAssignement
-          . crossingReduction 2 cross subgraphs
+          . crossingReduction 2 cross (nest, boxids, parentGraphOf)
+          . addBoxIdToLayers
           . arrangeMetaNodes
           . sortLayers
-          . addConnectionVertices
+          . addConnectionNodes
           . longestPathAlgo -- does not change the graph, only computes layers
           . addMissingInputNodes
       )
         graph
+    addBoxIdToLayers (gr,layers) = (gr, map (map (addBoxId gr)) layers)
+
+addBoxId g n = (n, maybe Nothing boxId nest)
+      where nest = maybe Nothing nestingFeatures lu
+            lu = Graph.lookupNode (fromIntegral n) g
 
 ------------------------------------------------------------------------------------------------------
 -- * Y-coordinate assignment
@@ -1085,7 +1053,7 @@ addMissingInputNodes graph =
     addConnNode g n
       | VU.null ps = g
       | isFunction graph n && isCase graph (vHead ps) = -- Debug.Trace.trace ("caseconn"++ show (n, vHead 1 ps)) $
-        insertConnNode g n (vHead ps) Nothing 0
+        insertConnNode g n (vHead ps) Nothing 0 (Nothing,0)
       | otherwise = g
       where
         ps = parentsNoVertical graph n
@@ -1115,77 +1083,78 @@ arrangeMetaNodes (graph, layers) =
 --
 -- When a connection line passes several layers, connection nodes have to be added
 
-addConnectionVertices :: (NodeClass n, Show n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
-addConnectionVertices (g, ls) =
-  addConnectionVs (g, ls)
+addConnectionNodes :: (NodeClass n, Show n, Graph.ExtractNodeType n, Enum n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
+addConnectionNodes (g, ls) = addConnectionNs (g, ls)
 
-addConnectionVs :: (NodeClass n, Show n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
-addConnectionVs (graph, []) = (graph, [])
-addConnectionVs (graph, [l0]) = (graph, [l0])
-addConnectionVs (graph, l0 : l1 : layers) = (fst adv, l0 : (snd adv))
+addConnectionNs :: (NodeClass n, Show n, EdgeClass e, Show e) => (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
+addConnectionNs (graph, []) = (graph, [])
+addConnectionNs (graph, [l0]) = (graph, [l0])
+addConnectionNs (graph, l0 : l1 : layers) = (fst adv, l0 : (snd adv))
   where
-    adv = addConnectionVs (newGraph, (newLayer : layers))
+    adv = addConnectionNs (newGraph, (newLayer : layers))
 
     (newGraph, newLayer) = foldl dummyNodeEdge (graph, l1) (zip [(fromIntegral (m + 1)) ..] innerSs)
     m = maximum (nodes graph)
 
     innerSs = concatMap innerSegments l0
     innerSegments n =
-      -- Debug.Trace.trace ("ps"++ show ps) $
-      zip3 (repeat n) notInLayerL1Parents chans
+      zip4 (repeat n) notInLayerL1Parents chans (repeat (bid,lay))
       where
-        notInLayerL1Parents = VU.toList (VU.filter isNotInLayerL1 ps)
         ps = parentsNoVertical graph n
         isNotInLayerL1 = not . (`elem` l1)
+        notInLayerL1Parents = VU.toList (VU.filter isNotInLayerL1 ps)
         chans = map (\e -> maybe (Nothing, 0) f e) edges
         f x = (channelNrIn (myHead 74 x), channelNrOut (myHead 75 x))
         edges = map (`lue` n) notInLayerL1Parents
         lue x y = Graph.lookupEdge (x, y) graph
+        nest | isJust lu = Common.nestingFeatures (myFromJust 516 lu)
+             | otherwise = Nothing
+        lu = Graph.lookupNode n graph
+        bid = maybe Nothing Common.boxId nest
+        lay = maybe 1 Common.layer nest
 
-    dummyNodeEdge :: (NodeClass n, Show n, EdgeClass e) => (CGraph n e, [UINode]) -> (UINode, (UINode, UINode, (Maybe Int, Int))) -> (CGraph n e, [UINode])
-    dummyNodeEdge (g, l) (v, (from, to, (chanIn, chanOut))) =
-      -- Debug.Trace.trace ("dummyNodeEdge"++ show (v,(from,to,chan)))
-      (insertConnNode g from to chanIn chanOut, v : l)
+    dummyNodeEdge :: (NodeClass n, Show n, EdgeClass e) => (CGraph n e, [UINode]) -> (UINode, (UINode, UINode, (Maybe Int, Int), (Maybe BoxId, Nesting))) -> (CGraph n e, [UINode])
+    dummyNodeEdge (g, l) (v, (from, to, (chanIn, chanOut), boxId)) =
+      (insertConnNode g from to chanIn chanOut boxId, v : l)
 
-insertConnNode :: (NodeClass n, Show n, EdgeClass e) => CGraph n e -> UINode -> UINode -> Maybe Channel -> Channel -> CGraph n e
-insertConnNode graph from to chanIn chanOut =
-  -- Debug.Trace.trace ("dummyNodeEdge"++ show (to, fromIntegral (m+1), chanIn, 0, chanOut, fromIntegral (m+1), from))
+insertConnNode :: (NodeClass n, Show n, EdgeClass e) => CGraph n e -> UINode -> UINode -> Maybe Channel -> Channel -> (Maybe BoxId, Nesting) -> CGraph n e
+insertConnNode graph from to chanIn chanOut (boxId, nest) =
   Graph.deleteEdge (Just True) (to, from) $
     Graph.insertEdge (Just True) (to, fromIntegral (m + 1)) [dummyEdge chanIn 0] $
       Graph.insertEdge
         (Just True)
         (fromIntegral (m + 1), from)
         [dummyEdge Nothing chanOut]
-        (Graph.insertNode (fromIntegral (m + 1)) connectionNode graph)
+        (Graph.insertNode (fromIntegral (m + 1)) (updateLayer (Just (LayerFeatures nest boxId Nothing)) connectionNode) graph)
   where
     m = maximum (nodes graph)
-    nest
-      | isJust lu = Common.nestingFeatures (myFromJust 516 lu)
-      | otherwise = Nothing
-    lu = Graph.lookupNode from graph
-    depth = maybe 1 Common.layer nest
 
 -- UIEdge 2 1 "" Curly "#ff5863" "" i False False]
 
 ------------------------------------------------------------------------------------------------------
 -- * Crossing reduction
---   
+--
+crossingReduction :: (NodeClass n, Show n, EdgeClass e, Show e, Graph.ExtractNodeType n, Enum n) =>
+                     Int -> Bool -> (NestMap, [BoxId], ParentGraphOf) -> (CGraph n e, [[(UINode, Maybe BoxId)]]) -> (CGraph n e, [[UINode]])
+crossingReduction i longestP (nestedGraphs, boxIds, parentGraphOf) (graph, layers) =
+    Debug.Trace.trace ("parentGraphOf " ++ show (parentGraphOf)) $
+    (newGraph, map (map fst) newLayers)
+  where (newGraph, newLayers) = crossingRed i longestP (nestedGraphs, boxIds, parentGraphOf) (graph, layers)
 
 -- | Crossing reduction is like taking a comb and aligning a chain of nodes from left to right and right to left until it is ordered with as little crossings as possible
-crossingReduction :: (NodeClass n, Show n, EdgeClass e, Show e, Graph.ExtractNodeType n, Enum n) => Int -> Bool -> (NestMap, [BoxId],[LayoutedSubgraph n e]) -> (CGraph n e, [[UINode]]) -> (CGraph n e, [[UINode]])
-crossingReduction i longestP (nestedGraphs, boxIds,subgraphs) (graph, layers)
+crossingRed :: (NodeClass n, Show n, EdgeClass e, Show e, Graph.ExtractNodeType n, Enum n) =>
+               Int -> Bool -> (NestMap, [BoxId], ParentGraphOf) -> (CGraph n e, [[(UINode, Maybe BoxId)]]) -> (CGraph n e, [[(UINode, Maybe BoxId)]])
+crossingRed i longestP (nestedGraphs, boxIds, parentGraphOf) (graph, layers)
   | i > 0 =
---      Debug.Trace.trace ("crossingReduction\nlayers    " ++ listShow layers ++
+--      Debug.Trace.trace ( -- "crossingReduction\nlayers    " ++ listShow layers ++
 --                         "\nc         "++ listShow c ++
---                         "\nnewlayers "++ listShow newLayers ++
---                         "\nsubgraphs" ++ show subgraphs) $
-    crossingReduction (i - 1) longestP (nestedGraphs, boxIds,subgraphs) (graph, newLayers)
+--                         "\nnewlayers "++ listShow newLayers) $
+    crossingRed (i - 1) longestP (nestedGraphs, boxIds, parentGraphOf) (graph, newLayers)
   | otherwise = (graph, layers)
   where
     -- nodes that are at the center of attention
     priorityNodes = VU.toList $ longestinfrequentPaths graph revLayers
-    revLayers = reverse (map (map fromIntegral) layers)
-    subgraphLayers = map ((map (map fromIntegral)) . snd . subgraph) subgraphs
+    revLayers = reverse (map (map first) layers)
     --  c = -- Debug.Trace.trace ("|r ") $ -- ++ show (layers, priorityNodes))
     --      (crossR graph LeftToRight (map (map fromIntegral) layers) priorityNodes longestP)
     --  newLayers = -- Debug.Trace.trace ("|l ") $ -- ++ show (layers, priorityNodes))
@@ -1193,13 +1162,18 @@ crossingReduction i longestP (nestedGraphs, boxIds,subgraphs) (graph, layers)
     --                  (reverse (crossR graph RightToLeft (reverse c) (reverse priorityNodes) longestP))
 
     c = -- Debug.Trace.trace ("|l " ++ show subgraphLayers) $ -- ++ show (layers, priorityNodes))
-        reverse (crossR graph RightToLeft (reverse (map (map fromIntegral) layers)) (reverse priorityNodes) longestP subgraphLayers)
+        reverse (crossR graph RightToLeft (reverse (map (map fi) layers)) (reverse priorityNodes) longestP parentGraphOf)
 
     newLayers =
       -- Debug.Trace.trace ("|r " ++ show subgraphLayers) $ -- ++ show (layers, priorityNodes))
       map
-        (map fromIntegral)
-        (crossR graph LeftToRight c priorityNodes longestP subgraphLayers)
+        (map fi)
+        (crossR graph LeftToRight c priorityNodes longestP parentGraphOf)
+
+first :: (Integral a, Num b1) => (a, b2) -> b1
+first (n,b) = fromIntegral n
+fi :: (Integral a1, Num a2) => (a1, b) -> (a2, b)
+fi (n,b) = (fromIntegral n, b)
 
 data Dir = LeftToRight | RightToLeft deriving (Show)
 
@@ -1208,35 +1182,25 @@ leftToRight LeftToRight = True
 leftToRight RightToLeft = False
 
 -- | One pass right to left and left to right
-crossR :: (NodeClass n, Show n, EdgeClass e, Show e) => CGraph n e -> Dir -> [[Int]] -> [Int] -> Bool -> [[[Int]]] -> [[Int]]
+crossR :: (NodeClass n, Show n, EdgeClass e, Show e) =>
+          CGraph n e -> Dir -> [[(Int, Maybe BoxId)]] -> [Int] -> Bool -> ParentGraphOf -> [[(Int, Maybe BoxId)]]
 crossR _ _ [] _ _ _ = []
-crossR g dir (l0 : l1 : layers) (n0 : n1 : ns) longestP subgraphLayers
+crossR g dir (l0 : l1 : layers) (n0 : n1 : ns) longestP parentGraphOf
   | crossings l0Enum bEnum <= crossings l0Enum l1Enum =
     --          Debug.Trace.trace ("a0 " ++ show (dir,l0p, b, l1p, (n0:n1:ns), crossings l0Enum bEnum, crossings l0Enum l1Enum,l0,l1)
     --                                   ++ "\n   " ++ show (nl0,nl1)) $
-    l0p : (crossR g dir (bv : layers) (n1 : ns) longestP newSubgraphLayers)
+    l0p : (crossR g dir (bv : layers) (n1 : ns) longestP parentGraphOf)
   | otherwise -- map (lv g) $
   --        Debug.Trace.trace ("a1 " ++ show (dir,l0p, b, l1p,l0Enum,l1Enum,bEnum,crossings l0Enum bEnum,crossings l0Enum l1Enum)
   --                                 ++ "\n " ++ show (nl0,nl1)) $
     =
-    l0p : (crossR g dir (l1p : layers) (n1 : ns) longestP newSubgraphLayers)
+    l0p : (crossR g dir (l1p : layers) (n1 : ns) longestP parentGraphOf)
   where
     nl0 = map fst (lv g l0)
     nl1 = map fst (lv g l1)
     --    isNoVert0 = not (or (map snd (lv g l0)))
     --    isNoVert1 = not (or (map snd (lv g l1)))
-    partitionLayers :: [([Int],[[Int]])]
-    partitionLayers = map subContainedInLayer subgraphLayers
-    foundLayers = map fst partitionLayers
-    newSubgraphLayers = -- Debug.Trace.trace ("part" ++ show (partitionLayers))
-                        (map snd partitionLayers)
-    subContainedInLayer :: [[Int]] -> ([Int],[[Int]])
-    subContainedInLayer [] = ([],[])
-    subContainedInLayer (l:ls)
-        | null l = Debug.Trace.trace "subContained 0" ([],ls)
-        | myHead 76 l `elem` l1 = Debug.Trace.trace ("subContained 1" ++ show l1) (l,ls)
-        | otherwise = Debug.Trace.trace ("subContained 2" ++ show (l,l1)) ([],ls)
-    b = barycenter g dir l0 l1 n1 foundLayers
+    b = barycenter g dir l0 l1 parentGraphOf n1
     bv = map fst (lv g b)
     --    m = median     g nl0 nl1
     l0p
@@ -1252,10 +1216,10 @@ crossR g dir (l0 : l1 : layers) (n0 : n1 : ns) longestP subgraphLayers
       -- show (primitiveInversionCount (VU.map getY1 $ lexifromJustcographicSort ee)) else "") $
       primitiveInversionCount (VU.map getY1 $ lexicographicSort ee)
       where
-        ee = VU.fromList (edgesEnum en0 en1 g dir (map fromIntegral nl0))
-    l0Enum = IM.fromList (zip nl0 [0 ..])
-    l1Enum = IM.fromList (zip nl1 [0 ..])
-    bEnum = IM.fromList (zip b [0 ..])
+        ee = VU.fromList (edgesEnum en0 en1 g dir (map first nl0))
+    l0Enum = IM.fromList (zip (map fst nl0) [0 ..])
+    l1Enum = IM.fromList (zip (map fst nl1) [0 ..])
+    bEnum = IM.fromList (zip (map fst b) [0 ..])
     --    mEnum  = IM.fromList (zip m  [0..])
 
     lu n = Graph.lookupNode (fromIntegral n) g
@@ -1264,30 +1228,32 @@ crossR _ _ ls ns _ _ = ls
 
 -- | Arrange vertical nodes directly below each other,
 -- returns Nothing if there are no vertical nodes in this layer
-lv :: EdgeClass e => CGraph n e -> [Int] -> [(Int, Bool)]
+lv :: (EdgeClass e, Show n, NodeClass n) => CGraph n e -> [(Int, Maybe BoxId)] -> [((Int, Maybe BoxId), Bool)]
 lv _ [] = []
 lv g (l : ls) =
   -- Debug.Trace.trace ("vertConnected "++ show ((l,ls,ls \\ vertConnected),(goUp ps),l,(goDown cs))) $
   vertConnected ++ (lv g (ls \\ (map fst vertConnected)))
   where
-    vertConnected :: [(Int, Bool)]
+    vertConnected :: [((Int, Maybe BoxId), Bool)]
     vertConnected
       | null up && null down = [(l, False)]
       | otherwise = map tr (up ++ [l] ++ down)
     tr ll = (ll, True)
     up = goUp ps
     down = goDown cs
-    ps = map fromIntegral $ VU.toList $ parentsVertical g (fromIntegral l)
-    goUp :: [Int] -> [Int]
+    ps = map addBid $ VU.toList $ parentsVertical g (fromIntegral (fst l))
+    goUp :: [(Int, Maybe BoxId)] -> [(Int, Maybe BoxId)]
     goUp n
       | null n = []
-      | otherwise = goUp (map fromIntegral $ VU.toList $ parentsVertical g (fromIntegral (head n))) ++ [fromIntegral (head n)]
+      | otherwise = goUp (map addBid $ VU.toList $ parentsVertical g (fromIntegral (fst (head n))))
+                     ++ [fi (head n)]
 
-    cs = map fromIntegral $ VU.toList $ childrenVertical g (fromIntegral l)
-    goDown :: [Int] -> [Int]
+    cs = map addBid $ VU.toList $ childrenVertical g (fromIntegral (fst l))
+    goDown :: [(Int, Maybe BoxId)] -> [(Int, Maybe BoxId)]
     goDown n
       | null n = []
-      | otherwise = (fromIntegral (head n)) : (goDown (map fromIntegral $ VU.toList $ childrenVertical g (fromIntegral (head n))))
+      | otherwise = (fi (head n)) : (goDown (map addBid $ VU.toList $ childrenVertical g (fromIntegral (fst (head n)))))
+    addBid i = addBoxId g (fromIntegral i)
 
 type YPos = Word32
 type IsDummy = Bool
@@ -1323,27 +1289,50 @@ edgesEnum en0 en1 gr dir l0 = catMaybes edges
       | otherwise = map (n,) (VU.toList (childrenNoVertical g n))
 
 
+data BaryNode = BarySingle (Int, Maybe BoxId)
+              | BaryGroup [BaryNode]
+instance Show BaryNode
+  where show (BarySingle (i,_)) = "s " ++ show i
+        show (BaryGroup is) = "g " ++ show is
+
 -- | Assign every node in l1 a number thats the barycenter of its neighbours in l0, then sort.
 -- If the node is marked as a vertical node with a number, this number has precedence in sorting
-barycenter :: (NodeClass n, Show n, EdgeClass e, Show e) => CGraph n e -> Dir -> [Int] -> [Int] -> Int -> [[Int]] -> [Int]
-barycenter g dir l0 l1 _ subgraphLayers =
---  Debug.Trace.trace ("bary " ++ show (dir, map bc l1, sortOn snd (map bc l1), subgraphLayers, foldr rearrange (sortOn snd (map bc l1)) subgraphLayers)) $
-  map fst (placeSubgraph (sortOn snd (map bc l1)))
+-- subgraph layouting is done here, by sorting nodes inside of blocks recursively
+barycenter :: (NodeClass n, Show n, EdgeClass e, Show e) =>
+              CGraph n e -> Dir -> [(Int, Maybe BoxId)] -> [(Int, Maybe BoxId)] -> ParentGraphOf -> Int -> [(Int, Maybe BoxId)]
+barycenter g dir l0 l1 parentGraphOf _ =
+    -- Debug.Trace.trace ("bary " ++ show (dir, l1, tree, flatten tree)) $
+    flatten tree
+    -- map fst (sortOn snd (zip l1 (map (bc . fst) l1))) -- use this, if there subgraph layouting makes problems
   where
-    placeSubgraph :: [(Int,Double)] -> [(Int,Double)]
-    -- foldr :: Foldable t => (a -> b -> b) -> b -> t a -> b
-    placeSubgraph l = l -- foldr rearrange l subgraphLayers
-    rearrange :: [Int] -> [(Int,Double)] -> [(Int,Double)]
-    rearrange sub layr = start ++ newSub ++ (deleteFirstsBy remove (zip sub [0..]) end)
-      where (start,end) | null sub = ([],[])
-                        | otherwise = span f layr
-            f (a,_) = a /= myHead 78 sub
-            newSub = map (, snd (myHead 79 end)) sub
-            remove (s,_) (e,_) = s == e
-    bc :: Int -> (Int, Double)
+    tree = map fst (integrate start)
+    start = Nothing :: Maybe BoxId
+
+    integrate :: Maybe BoxId -> [(BaryNode, Double)]
+    integrate currentBlock = -- Debug.Trace.trace ("integrate " ++ show (currentBlock, nbs, singleNodes, newBaryNodes)) $
+                             map bcSingle singleNodes
+                             ++ map (bcGroup . sortOn snd) newBaryNodes
+      where singleNodes = filter upperBlockNode l1
+            upperBlockNode (n, mbid) = mbid == currentBlock
+            bcSingle i = (BarySingle i, bc (fst i)) -- a single node gets a barycenter weight
+
+            nbs = nextBlocks currentBlock
+            newBaryNodes :: [[(BaryNode, Double)]]
+            newBaryNodes = map integrate nbs
+            bcGroup ns = (BaryGroup (map fst ns), sum (map snd ns) / fromIntegral (length ns)) -- a group of nodes from a subgraph gets an average barycenter weight
+
+    nextBlocks :: Maybe BoxId -> [Maybe BoxId]
+    nextBlocks startBlock = maybe [] (map Just . Set.toList) (Map.lookup startBlock parentGraphOf)
+
+    flatten :: [BaryNode] -> [(Int, Maybe BoxId)]
+    flatten bs = concatMap f bs
+      where f (BarySingle i) = [i]
+            f (BaryGroup is) = flatten is
+
+    bc :: Int -> Double
     bc node =
       -- Debug.Trace.trace ("bc" ++ show (dir, node, ps, cs, l0, l1, nodeWeight dir))
-      (node, nodeWeight dir)
+        nodeWeight dir
       where
         lenCs = fromIntegral (VU.length cs)
         lenPs = fromIntegral (VU.length ps)
@@ -1384,7 +1373,7 @@ barycenter g dir l0 l1 _ subgraphLayers =
         xpos :: Int -> Double
         xpos c =
           -- Debug.Trace.trace (show (c, l0,maybe 0 fromIntegral (elemIndex c l0), subPos c)) $
-                 (maybe 0 fromIntegral (elemIndex c l0))
+                 (maybe 0 fromIntegral (elemIndex c (map fst l0)))
 
         subPos :: VU.Vector Int -> Double
         subPos cs | VU.null cs = 0

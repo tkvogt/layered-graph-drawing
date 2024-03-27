@@ -1137,7 +1137,7 @@ insertConnNode graph from to chanIn chanOut (boxId, nest) =
 crossingReduction :: (NodeClass n, Show n, EdgeClass e, Show e, Graph.ExtractNodeType n, Enum n) =>
                      Int -> Bool -> (NestMap, [BoxId], ParentGraphOf) -> (CGraph n e, [[(UINode, Maybe BoxId)]]) -> (CGraph n e, [[UINode]])
 crossingReduction i longestP (nestedGraphs, boxIds, parentGraphOf) (graph, layers) =
-    Debug.Trace.trace ("parentGraphOf " ++ show (parentGraphOf)) $
+    -- Debug.Trace.trace ("parentGraphOf " ++ show (parentGraphOf)) $
     (newGraph, map (map fst) newLayers)
   where (newGraph, newLayers) = crossingRed i longestP (nestedGraphs, boxIds, parentGraphOf) (graph, layers)
 
@@ -1301,16 +1301,16 @@ instance Show BaryNode
 barycenter :: (NodeClass n, Show n, EdgeClass e, Show e) =>
               CGraph n e -> Dir -> [(Int, Maybe BoxId)] -> [(Int, Maybe BoxId)] -> ParentGraphOf -> Int -> [(Int, Maybe BoxId)]
 barycenter g dir l0 l1 parentGraphOf _ =
-    -- Debug.Trace.trace ("bary " ++ show (dir, l1, tree, flatten tree)) $
+    -- Debug.Trace.trace ("bary " ++ show (dir, l1, tree, flatten tree, integrate start)) $
     flatten tree
-    -- map fst (sortOn snd (zip l1 (map (bc . fst) l1))) -- use this, if there subgraph layouting makes problems
+--    map fst (sortOn snd (zip l1 (map (bc . fst) l1))) -- use this, if there subgraph layouting makes problems
   where
     tree = map fst (integrate start)
     start = Nothing :: Maybe BoxId
 
     integrate :: Maybe BoxId -> [(BaryNode, Double)]
     integrate currentBlock = -- Debug.Trace.trace ("integrate " ++ show (currentBlock, nbs, singleNodes, newBaryNodes)) $
-                             map bcSingle singleNodes
+                             sortOn snd (map bcSingle singleNodes)
                              ++ map (bcGroup . sortOn snd) newBaryNodes
       where singleNodes = filter upperBlockNode l1
             upperBlockNode (n, mbid) = mbid == currentBlock

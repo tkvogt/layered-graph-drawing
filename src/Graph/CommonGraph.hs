@@ -32,10 +32,14 @@ type UINode = Word32
 type CGraph n e = Graph n [e]
 
 -- | Layouted Graph, assign a (x,y) position to every node
-type CGraphL n e = (Graph n [e], Map UINode (X, Y))
+--   also returning the blocks in yCoordinateassignment, the final layouting has to be done in javascript
+type CGraphL n e = (Graph n [e], Map UINode (X, Y), YBlockLines)
 
 type X = Int
 type Y = Int
+type YBlock      =  (Y, [(UINode, X)])
+type YBlocks     =  (Y, [[(UINode, X)]])
+type YBlockLines = [(Y, [[(UINode, X)]])]
 
 -- | Nodes could be grouped into lists. But as a lof of algorithms walk through the graph, 
 --   it is more convenient to see for example if a node is connected vertically than to see if it is part of a list of vertically grouped nodes.

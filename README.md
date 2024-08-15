@@ -40,17 +40,17 @@ Using: [Fast and Simple Horizontal Coordinate Assignment](https://kops.uni-konst
 
 &nbsp;
 
-## Algorithm extensions (vertical and virtual edges, sub fields)
+## Algorithm extensions (vertical and virtual edges, ports)
 
 * Sometimes nodes have to be drawn vertically below each other. To force the algorithm to do this, you have to connect them with vertical edges. The edges are not drawn, but guide the algorithm, which unfortunelty made the algorithms (especially longest path) more complex.
 
 * Virtual edges are also not drawn but are used when several unconnected graphs have to be displayed in a a row. I don't know if this was the best decision.
 
-* A node can have sub fields, which is important when these sub fields are connected separately to other nodes. The number of this subfield (channel) is used in  Crossing reduction.
+* A node can have sub fields (ports), which is important when these sub fields are connected separately to other nodes. The number of this port is used in  Crossing reduction.
 
 ## Putting the graph in a box
 
-The module [SubgraphWindows](https://github.com/tkvogt/layered-graph-drawing/blob/main/src/Graph/SubGraphWindows.hs) contains an algorithm that calculates boxes around graphs and subgraphs by using a nesting attribute of the node, adding border and nesting attributes to every cell of the html table.
+The module [SubgraphWindows](https://github.com/tkvogt/layered-graph-drawing/blob/main/src/Graph/SubGraphWindows.hs) contains an algorithm that calculates boxes around graphs and subgraphs by using a nesting attribute and box id of the node, adding border and nesting attributes to every cell of the html table. When you generate nodes that should be in a box, put the boxId of the current box to every node. The algorithm in subgraphwindows then adds borders to every cell of the table.
 
 This algorithm was implemented to develop a visual programming environment, which is work in progress: www.autocompletion.io
 

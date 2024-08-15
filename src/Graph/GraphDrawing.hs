@@ -30,6 +30,9 @@ import           Graph.CommonGraph
     CGraphL,
     Channel,
     Column,
+    YBlock,
+    YBlocks,
+    YBlockLines,
     EdgeClass (channelNrIn, channelNrOut, dummyEdge, standard),
     EdgeType (NormalEdge),
     GraphMoveX,
@@ -58,7 +61,7 @@ import           Graph.CommonGraph
 import qualified Graph.CommonGraph as Common
 import           Graph.IntMap (Graph (..), nodes)
 import qualified Graph.IntMap as Graph
-import           Graph.SubGraphWindows (subgraphWindows, getRows, getColumns, NestMap, ShowGraph)
+import           Graph.SubGraphWindows (subgraphWindows, subgraphWithWindows, getRows, getColumns, NestMap, ShowGraph)
 import           Debug.Trace (trace)
 
 ------------------------------------------------------------------------------------------------------
@@ -70,7 +73,7 @@ layeredGraphAndCols ::
   (NodeClass n, EdgeClass e, ShowGraph n e) =>
   Bool ->
   CGraph n e ->
-  (CGraphL n e, (Map.Map GraphMoveX [UINode], Map.Map Int [Column]))
+  (CGraphL n e, (Map.Map GraphMoveX [UINode], Map.Map Int ([Column], YBlockLines)))
 layeredGraphAndCols cross graph = (g, getColumns g)
   where
     g = layeredGraphWithSub cross graph
@@ -78,12 +81,8 @@ layeredGraphAndCols cross graph = (g, getColumns g)
 -- | layered graph drawing with subgraph layouting
 layeredGraphWithSub :: (NodeClass n, EdgeClass e, ShowGraph n e) => VU.Unbox UINode => Bool -> CGraph n e -> CGraphL n e
 layeredGraphWithSub cross graph = -- Debug.Trace.trace (show("deepestNesting", deepestNesting graph)) $
-                                  -- subgraphLayouting cross (graph, pos) layoutedSubGraphs z (nestedGraphs, nodesOfBoxId, subgraphs)
-                                  fst (layeredGraph cross graph (nestedGraphs, Map.keys nodesOfBoxId, parentGraphOf))
-  where pos = Map.empty
-        layoutedSubGraphs = Map.empty
-        (nestedGraphs, nodesOfBoxId, parentGraphOf) = deepestNesting graph
-        z = fst (Map.findMax nestedGraphs)
+                                  layeredGraph cross graph (nestedGraphs, Map.keys nodesOfBoxId, parentGraphOf)
+  where (nestedGraphs, nodesOfBoxId, parentGraphOf) = deepestNesting graph
 
 type BoxMap = Map BoxId (Set UINode) -- ^ nodes inside the box
 type ParentGraphOf = Map (Maybe BoxId)  -- ^parent
@@ -134,14 +133,13 @@ deepestNesting gr = -- Debug.Trace.trace (show ("gr", gr, "startNode", startNode
 
 layeredGraph ::
   (VU.Unbox UINode, NodeClass n, EdgeClass e, ShowGraph n e) =>
-  Bool -> CGraph n e -> (NestMap, [BoxId], ParentGraphOf) -> (CGraphL n e, [[UINode]]) -- TODO subgraphs
+  Bool -> CGraph n e -> (NestMap, [BoxId], ParentGraphOf) -> CGraphL n e
 layeredGraph cross graph (nest, boxids, parentGraphOf) =
---  Debug.Trace.trace ("layered "++ show (graph,subgraphs) ++"\n") -- ++ showEdges graph ++ show (Graph.edgeLabels graph)) $ -- ++"\nnewGraph\n" ++ show newGraph ++"\n") $
-  newGraph
+  -- Debug.Trace.trace ("layered "++ show (graph, subgraphWindows (nest,boxids) ycoord) ++"\n") -- ++ showEdges graph ++ show (Graph.edgeLabels graph)) $ -- ++"\nnewGraph\n" ++ show newGraph ++"\n") $
+  fst newGraph
   where
-    sortLayers (gr, ls) = (gr, map sort ls) -- makes the dummy vertices appear lower -- TODO don't move layouted nodes
     newGraph =
-      (   subgraphWindows (nest,boxids) .
+      (   subgraphWithWindows (nest,boxids) .
             yCoordinateAssignement
           -- .
           --  primitiveYCoordinateAssignement
@@ -156,6 +154,11 @@ layeredGraph cross graph (nest, boxids, parentGraphOf) =
         graph
     addBoxIdToLayers (gr,layers) = (gr, map (map (addBoxId gr)) layers)
 
+    ycoord = (yCoordinateAssignement . crossingReduction 2 cross (nest, boxids, parentGraphOf) . addBoxIdToLayers
+              . arrangeMetaNodes . sortLayers . addConnectionNodes . longestPathAlgo . addMissingInputNodes) graph
+
+sortLayers (gr, ls) = (gr, map sort ls) -- makes the dummy vertices appear lower -- TODO don't move layouted nodes
+
 addBoxId g n = (n, maybe Nothing boxId nest)
       where nest = maybe Nothing nestingFeatures lu
             lu = Graph.lookupNode (fromIntegral n) g
@@ -168,7 +171,7 @@ addBoxId g n = (n, maybe Nothing boxId nest)
 primitiveYCoordinateAssignement :: (CGraph n e, [[UINode]]) -> CGraphL n e
 primitiveYCoordinateAssignement (graph, layers) =
       -- Debug.Trace.trace ("primitiveY1 "++ show (layers,ns)) $
-  (graph, Map.fromList ns)
+  (graph, Map.fromList ns, [])
   where
     ns :: [(UINode, (Int, Int))]
     ns = concat $ zipWith (\layer i -> map (incX i) layer) (map oneLayer layers) ([0 ..] :: [Int])
@@ -219,30 +222,55 @@ positionNode graph (x,y,n) =
 -}
 
 -- | See "Fast and Simple Horizontal Coordinate Assignment" (Brandes, Köpf)
-yCoordinateAssignement :: (NodeClass n, EdgeClass e) => (CGraph n e, [[UINode]]) -> (CGraphL n e, [[UINode]])
+yCoordinateAssignement :: (NodeClass n, Show n, EdgeClass e, Graph.ExtractNodeType n, Show e, Enum n) => (CGraph n e, [[UINode]]) -> (CGraphL n e, [[UINode]])
 yCoordinateAssignement (graph, layers) =
-  -- Debug.Trace.trace ("\nyCoordAssign "++ show (layers,graph,pos)) $
-  ((graph, pos), layers)
+  --Debug.Trace.trace ("\nyCoordAssign "++ show (zipWith f [0 ..] layers, "startNs", startNs, "map (blockC", map (blockChildren edgeMap) startNs, "yblocks", yblocks)) $
+  ((graph, pos, yblocks), layers)
   where
     -- newGraph = graph { nodeLabels = I.fromList placedNodes } -- for debugging (Map.fromList edgesToKeep)
     pos :: Map UINode (Int, Int)
     pos = horizontalBalancing lu ld ru rd
-    lu = biasedAlignment graph yPos medians (reverse nLayers) (True, True)
-    ld = biasedAlignment graph yPos medians (reverse nLayers) (True, False)
-    ru = biasedAlignment graph yPos medians (reverse nLayers) (False, True)
-    rd = biasedAlignment graph yPos medians (reverse nLayers) (False, False)
+    lu = biasedAlignment graph yp ms (reverse nLayers) (True, True)
+    ld = biasedAlignment graph yp ms (reverse nLayers) (True, False)
+    ru = biasedAlignment graph yp ms (reverse nLayers) (False, True)
+    rd = biasedAlignment graph yp ms (reverse nLayers) (False, False)
+
+    ms = medians (graph, layers)
+    yp = yPos layers
+
+    nLayers = map (map connProp) layers
+    connProp n = (n, isConnNode graph n)
+
+    -- | Instead of arranging the graph nodes in a table, it can be better to arrange the nodes in columns where the nodes are placed with individual height
+    -- This is necessary when nodes have highly different sizes. Since this depends on the final styling of the html, the individual height of the nodes has to be calcluated in javascript,
+    -- taking the y-blocks of the yCoordinateAssignement algorithm
+    yblocks = removeDups (longestPath (map (blockChildren edgeMap) startNs) [] 0 graph layers edgesToKeep)
+    removeDups :: YBlockLines -> YBlockLines
+    removeDups ls = snd (foldr rm (Set.empty,[]) ls)
+    rm :: YBlocks -> (Set UINode,YBlockLines) -> (Set UINode,YBlockLines)
+    rm    (yb,l)     (s,res) | null new = (s, res)
+                             | otherwise = (Set.union (Set.fromList (map (fst . head) (snd new))) s, new : res)
+        where new :: YBlocks
+              new = (yb, filter h l)
+              h :: [(UINode, X)] -> Bool
+              h block = not (Set.member (fst (head block)) s)
+
+    startNs = mapMaybe (nodeWithoutParent layers edgesToKeep. last) (zipWith f (reverse [0 .. (length layers -1)]) layers)
+    f i ns = map (i,) ns
+    edgeMap = Map.fromList edgesToKeep
+    edgesToKeep = rmdups $ concatMap (concatMap resolve . sweep2 (medians (graph, layers)) True) (tuples (reverse nLayers))
+    resolve ts = rmdups $ map toNode (resolveConflicts (True, True) ts)
 
     -- for debugging
     --      edgesToKeep :: [(Graph.DirEdge UINode, [UIEdge])]
     --      edgesToKeep = map (\(x,y) -> (Graph.DirEdge x y, fromJust (Graph.lookupEdge (Graph.DirEdge x y) graph))) $
     --                      concat $ map (sweep medians Map.empty 0 (True,True)) (tuples (reverse nLayers))
 
-    yPos = Map.fromList (concat enumLayers)
-    enumLayers = map (\l -> zip l [0 ..]) layers
-    nLayers = map (map connProp) layers
-    connProp n = (n, isConnNode graph n)
+yPos layers = Map.fromList (concat enumLayers)
+  where enumLayers = map (\l -> zip l [0 ..]) layers
 
-    medians = (Map.fromList lowerMedians, Map.fromList upperMedians)
+medians (graph, layers) = (Map.fromList lowerMedians, Map.fromList upperMedians)
+  where
     upperMedians =
       -- Debug.Trace.trace ("upper"++ show (map upper ns, map (getMedian . upper) ns)) $
       mapMaybe (getMedian . upper) ns
@@ -271,7 +299,7 @@ yCoordinateAssignement (graph, layers) =
         rightMedian = addConnProp (sorted !! (l `div` 2))
         l = length ns1
         sorted = sortOn fst nodeLbls
-        nodeLbls = map (\node -> (fromMaybe 0 (Map.lookup node yPos), node)) ns1
+        nodeLbls = map (\node -> (fromMaybe 0 (Map.lookup node (yPos layers)), node)) ns1
         addConnProp (y, node) = (y, (node, isConnNode graph node))
 
 -- the paper suggest to use an average of four alignments (TODO)
@@ -319,7 +347,7 @@ getN (Middle (_y, (n, _b))) = [n]
 getN (UpLowMedian (_y0, (n0, _b0)) (_y1, (n1, _b1))) = [n0, n1]
 
 biasedAlignment ::
-  (NodeClass n, EdgeClass e) =>
+  (NodeClass n, Show n, EdgeClass e, Graph.ExtractNodeType n, Show e, Enum n) =>
   CGraph n e ->
   Map UINode Y ->
   (Median, Median) ->
@@ -339,7 +367,7 @@ biasedAlignment graph _ medians layers dir =
       -- Debug.Trace.trace ("\n\nedgesToKeep "++ show dir ++ "\ndigraph G {" ++
       --                   (concat $ map line edgesToKeep) ++"\n"++ placeNodes ++ "\n}") -- \n\nmedians "++ show medians) $
       align graph (map (map fst) layers) edgesToKeep dir
-    edgesToKeep = rmdups $ concatMap (concatMap resolve . sweep2) (tuples layers)
+    edgesToKeep = rmdups $ concatMap (concatMap resolve . sweep2 medians left) (tuples layers)
     _line (from, to) = "\n" ++ show from ++ " -> " ++ show to
     _placeNodes = concat $ concatMap (map placeNode) (zipWith (zip . repeat) [1 ..] (map (zip [1 ..]) layers))
       where
@@ -371,25 +399,25 @@ biasedAlignment graph _ medians layers dir =
 
     -- sweeping through a layer to find all edges without separating them into independent lists
     -- maybe slower in some cases, faster in others
-    sweep2 :: ([(UINode, Bool)], [(UINode, Bool)]) -> [[(MYN, MYN)]]
-    sweep2 (layer0, _layer1) =
-      -- Debug.Trace.trace ("sweep2 "++ show (layer0, layer1,es))
-      es
+sweep2 :: (Median, Median) -> Bool -> ([(UINode, Bool)], [(UINode, Bool)]) -> [[(MYN, MYN)]]
+sweep2 medians left (layer0, _layer1) =
+  -- Debug.Trace.trace ("sweep2 "++ show (layer0, layer1,es))
+  es
+  where
+    es = [catMaybes (zipWith f [0 ..] layer0)]
+    f y (n, b)
+      | isJust lu && isValidEdge -- Debug.Trace.trace ("sweep2lu0 "++ show lu) $
+        =
+        Just (Single (y, (n, b)), myFromJust 501 lu)
+      | otherwise -- Debug.Trace.trace ("sweep2lu1 "++ show (n,lu))
+        =
+        Nothing
       where
-        es = [catMaybes (zipWith f [0 ..] layer0)]
-        f y (n, b)
-          | isJust lu && isValidEdge -- Debug.Trace.trace ("sweep2lu0 "++ show lu) $
-            =
-            Just (Single (y, (n, b)), myFromJust 501 lu)
-          | otherwise -- Debug.Trace.trace ("sweep2lu1 "++ show (n,lu))
-            =
-            Nothing
-          where
-            lu = Map.lookup n (snd medians)
-            luBack = Map.lookup (fst $ snd $ getYN left $ myFromJust 502 lu) (fst medians)
-            isValidEdge =
-              -- Debug.Trace.trace ("n,lu,luBack "++ show (n,lu,luBack)) $
-              isJust luBack && n == fst (snd $ getYN left $ myFromJust 503 luBack)
+        lu = Map.lookup n (snd medians)
+        luBack = Map.lookup (fst $ snd $ getYN left $ myFromJust 502 lu) (fst medians)
+        isValidEdge =
+          -- Debug.Trace.trace ("n,lu,luBack "++ show (n,lu,luBack)) $
+          isJust luBack && n == fst (snd $ getYN left $ myFromJust 503 luBack)
 
 toNode :: ((a1, (a2, b1)), (a3, (b2, b3))) -> (a2, b2)
 toNode ((_, (n0, _)), (_, (n1, _))) = (n0, n1)
@@ -679,18 +707,45 @@ cases left (n0, n1) (n2, n3)
         False
 
 
+blockChildren :: Map UINode UINode -> (X, UINode) -> [(X, UINode)]
+blockChildren edgeMap (x, n)
+  | isJust lu = (x, n) : blockChildren edgeMap (x + 1, myFromJust 513 lu)
+  | otherwise = [(x, n)]
+    where lu = Map.lookup n edgeMap
+
+nodeWithoutParent :: [[UINode]] -> [(UINode, UINode)] -> (X, UINode) -> Maybe (X, UINode)
+nodeWithoutParent layers edges (x, n)
+  | isNothing (Map.lookup n reverseBlocks)
+      && noParentInLayer (x, n) -- no parent in block
+    =
+      --  Debug.Trace.trace ("nodeWoPar0 "++ show (n, Map.lookup n reverseBlocks, noParentInLayer (x,n))) $
+      Just (x, n)
+  | otherwise =
+    --  Debug.Trace.trace ("nodeWoPar1 "++ show (n, Map.lookup n reverseBlocks, noParentInLayer (x,n))) $
+    Nothing
+      where
+        noParentInLayer root =
+          -- Debug.Trace.trace ("noParInLayer "++ show (root, blockChildren root,
+          --                   map hasNoLayerParent (blockChildren root))) $
+          all hasNoLayerParent (blockChildren edgeMap root)
+
+        hasNoLayerParent (_, _n) = isNothing (Map.lookup n layerConnections)
+        reverseBlocks = Map.fromList (map swap edges)
+        edgeMap = Map.fromList edges
+        layerConnections = Map.fromList $ concatMap tuples layers
+
 -- | Similar to Brandes-Köpf but without arrays and no placement of blocks
 -- The basic algorithm is longest path.
 -- debugging can be done with graphviz, also uncomment line 533 in longestPath | otherwise
-align :: EdgeClass e => CGraph n e -> [[UINode]] -> [(UINode, UINode)] -> (Bool, Bool) -> Map UINode (Int, Int)
+align :: (EdgeClass e, Show n, NodeClass n, Graph.ExtractNodeType n, Show e, Enum n) => CGraph n e -> [[UINode]] -> [(UINode, UINode)] -> (Bool, Bool) -> Map UINode (X, Y)
 align graph layers edges (_alignLeft, _up) =
-  {-Debug.Trace.trace ("\nalign\ndigraph{\n"++ (concat $ map ranksame layers)
-                      ++ (concat (map ((++ "\n") . (intercalate " -> ") . (map show)) layers))
-                      ++ (graphviz "[color=red,penwidth=2];" edges)
-                      ++ (graphviz "" es) ++ "}\n"
-                      ++ show (startNs, map last (zipWith f [0..] layers))
-                      ++"\nblocks\n"++ show blocks ++ "\nnextInLayerMap" ++ show nextInLayerMap
-                    )-}
+--  Debug.Trace.trace ("\nalign\ndigraph{\n" ++ (unlines (map ranksame layers))
+--                      ++ (concat (map ((++ "\n") . (intercalate " -> ") . (map show)) layers))
+--                      ++ (graphviz "[color=red,penwidth=2];" edges)
+--                      ++ (graphviz "" _es) ++ "}\n"
+--                      ++ show (startNs, map last (zipWith f [0..] layers))
+--                      ++"\nblocks\n"++ show blocks ++ "\nnextInLayerMap" ++ show nextInLayerMap
+--                    )
   mb2
   where
     --  | up = lp
@@ -698,94 +753,29 @@ align graph layers edges (_alignLeft, _up) =
     -- mb = Debug.Trace.trace ("lp\n" ++ show lp ++ "\nmb\n" ++ show (moveBlocks (Map.fromList lp))) $
     --     moveBlocks (Map.fromList lp)
     mb2 =
-      -- Debug.Trace.trace ("lp\n" ++ show lp ++ "\nmb\n" ++ show (moveBlocks (Map.fromList lp), moveBlocksAgain (Map.fromList lp)) ++ "\n") $
-      moveBlocksAgain (Map.fromList lp)
-    lp = longestPath (map blockChildren startNs) [] 0
+          -- Debug.Trace.trace ("lp\n" ++ show lp ++ "\nmb\n" ++ show (moveBlocks (Map.fromList lp), moveBlocksAgain (Map.fromList lp)) ++ "\n") $
+          moveBlocksAgain (Map.fromList lpAddY)
+    lpAddY = concat (concat (map addY lp))
+    addY (y,ls) = map (map ay) ls where ay (n,x) = (n,(x,y))
+    lp = longestPath (map (blockChildren edgeMap) startNs) [] 0 graph layers edges -- type YBlockLines = [(Y, [[(UINode, X)]])]
     --        globalYMin = minimum (map (snd . snd) lp)
-    --        lpBackwards = longestPath (map blockChildren startNsBackwards) [] 0
-    layerConnections = Map.fromList $ concatMap tuples layers
-    reverseLayerConnections = Map.fromList $ concatMap (tuples . reverse) layers
+    --        lpBackwards = longestPath (map (blockChildren edgeMap) startNsBackwards) [] 0 graph layers edges
     edgeMap = Map.fromList edges
     reverseBlocks = Map.fromList (map swap edges)
     _es = Map.keys (Graph.edgeLabels graph) \\ edges
 
-    startNs = mapMaybe (nodeWithoutParent . last) (zipWith f [0 ..] layers)
+    startNs = mapMaybe (nodeWithoutParent layers edges . last) (zipWith f [0 ..] layers)
     --        startNsBackwards = catMaybes $ map (nodeWithoutParent . head) (zipWith f [0..] layers)
     f i ns = map (i,) ns
 
-    nodeWithoutParent (x, n)
-      | isNothing (Map.lookup n reverseBlocks)
-          && noParentInLayer (x, n) -- no parent in block
-        =
-        --  Debug.Trace.trace ("nodeWoPar0 "++ show (n, Map.lookup n reverseBlocks, noParentInLayer (x,n))) $
-        Just (x, n)
-      | otherwise =
-        --  Debug.Trace.trace ("nodeWoPar1 "++ show (n, Map.lookup n reverseBlocks, noParentInLayer (x,n))) $
-        Nothing
+    -- debugging with http://www.webgraphviz.com/
+    graphviz :: (Show a1, Show a2) => String -> [(a1, a2)] -> String
+    graphviz col edges = concat (map l edges) ++ "\n"
       where
-        noParentInLayer root =
-          -- Debug.Trace.trace ("noParInLayer "++ show (root, blockChildren root,
-          --                   map hasNoLayerParent (blockChildren root))) $
-          all hasNoLayerParent (blockChildren root)
+        l (n0, n1) = "\n" ++ show n0 ++ " -> " ++ show n1 ++ " " ++ col
 
-        hasNoLayerParent (_, _n) = isNothing (Map.lookup n layerConnections)
-
-    blockChildren :: (X, UINode) -> [(X, UINode)]
-    blockChildren (x, n)
-      | isJust lu = (x, n) : blockChildren (x + 1, myFromJust 513 lu)
-      | otherwise = [(x, n)]
-      where
-        lu = Map.lookup n edgeMap
-
-    longestPath :: [[(X, UINode)]] -> [UINode] -> Int -> [(UINode, (Int, Int))]
-    longestPath [] _ _ =
-      -- Debug.Trace.trace "finish"
-      []
-    longestPath blockNodes used i
-      | i > 100 -- Debug.Trace.trace ("reverseBlocks " ++ show (edges, reverseBlocks)) $
-        =
-        []
-      | otherwise -- Debug.Trace.trace ((concat $ map (col i) blns) ++ "\n") $
-      --      ++ "map layerChild " ++ show (map layerChild (concat blockNodes)) ++ "\n"
-      --      ++ "nextLayerRoots " ++ show nextLayerRoots ++ "\n"
-      --      ++ "map blockChildren nextLayerRoots " ++ show (map blockChildren nextLayerRoots) ++ "\n"
-      --      ++ "blocksWithOnlyUsedParents " ++ show blocksWithOnlyUsedParents ++ "\n"
-      --      ++ "newUsed " ++ show newUsed
-      --                ) $
-        =
-        newLayer ++ longestPath blocksWithOnlyUsedParents newUsed (i + 1)
-      where
-        newLayer = concatMap (oneLayer i) blockNodes
-        blocksWithOnlyUsedParents = rmdups $ filter noParentOrUsed (map blockChildren nextLayerRoots)
-        --                                          | otherwise = rmdups $ filter noParentOrUsed (map blockChildren nextLayerRootsBackwards)
-        nextLayerRoots = myNub2 (map findRoot nextPossibleLayerNodes)
-        --                nextLayerRootsBackwards = myNub2 (map findRoot nextPossibleLayerNodesBackwards)
-        nextPossibleLayerNodes = mapMaybe layerChild (concat blockNodes)
-        --                nextPossibleLayerNodesBackwards = catMaybes (map layerParent (concat blockNodes))
-        layerChild (x, n) = maybe Nothing (\node -> Just (x, node)) (Map.lookup n reverseLayerConnections)
-        --                layerParent (x,n) = maybe Nothing (\node -> Just (x,node)) (Map.lookup n layerConnections)
-        newUsed = used ++ blns
-        blns = map snd (concat blockNodes)
-        noParentOrUsed block =
-          -- Debug.Trace.trace ("noParentOrUsed "++ show (block, map noParOrUsed block, newUsed)) $
-          all noParOrUsed block
-        noParOrUsed (_, n) =
-          -- Debug.Trace.trace ("noParOrUsed "++ show (n,lu)) $
-          isNothing lu || (isJust lu && elem (myFromJust 514 lu) newUsed)
-          where
-            lu = Map.lookup n layerConnections
-
-    oneLayer :: Y -> [(X, UINode)] -> [(UINode, (Int, Int))]
-    oneLayer y ns = map (\(x, n) -> (n, (x, -y))) ns
-
-    findRoot :: (X, UINode) -> (X, UINode)
-    findRoot (x, n)
-      | isJust lu && x >= 0 -- Debug.Trace.trace ("findRoot " ++ show (x,n)) $
-        =
-        findRoot (x - 1, myFromJust 515 lu)
-      | otherwise = (x, n)
-      where
-        lu = Map.lookup n reverseBlocks
+    ranksame :: [UINode] -> String
+    ranksame ls = "{ rank=same; " ++ intercalate " " (map show ls) ++ " }"
 
     blocks = extr ++ (map (\x -> [x]) rest)
       where
@@ -839,6 +829,7 @@ align graph layers edges (_alignLeft, _up) =
     moveBlocks m =
       -- Debug.Trace.trace ("blocks" ++ show blocks ++ "\nm\n" ++ show (foldr moveToShortestConnection m (reverse blocks)))
       foldr moveToShortestConnection m (reverse blocks)
+    moveBlocksAgain :: Map UINode (X, Y) -> Map UINode (X, Y)
     moveBlocksAgain m =
       -- Debug.Trace.trace ("blocks" ++ show blocks ++ "\nm\n" ++ show (foldr moveToShortestConnection m (reverse blocks)))
       foldr moveToShortestConnection (moveBlocks m) (reverse blocks)
@@ -873,7 +864,99 @@ align graph layers edges (_alignLeft, _up) =
       where
         adj b mp = Map.adjust (\(x, _y) -> (x, newY)) b mp
 
--- * Longest Path
+-- * Longest Path for horizontal layers
+--
+
+longestPath :: (NodeClass n, EdgeClass e, ShowGraph n e) => 
+               [[(X, UINode)]] -> [UINode] -> Int -> CGraph n e -> [[UINode]] -> [(UINode, UINode)] -> YBlockLines
+longestPath [] _ _ _ _ _ =
+  -- Debug.Trace.trace "finish"
+  []
+longestPath blockNodes used i graph layers edges
+  | i > 100 = [] -- Debug.Trace.trace ("reverseBlocks " ++ show (edges, reverseBlocks)) $
+  | otherwise =
+--      Debug.Trace.trace ( -- (concat $ map (col i) blns) ++ "\n") $
+--           "map layerChild " ++ show (map layerChild (concat blockNodes)) ++ "\n"
+--        ++ "nextLayerRoots " ++ show nextLayerRoots ++ "\n"
+--        ++ "map blockChildren nextLayerRoots " ++ show (map (blockChildren edgeMap) nextLayerRoots) ++ "\n"
+--        ++ "blocksWithOnlyUsedParents " ++ show blocksWithOnlyUsedParents ++ "\n"
+--        ++ "newUsed " ++ show newUsed
+--                        ) $
+    newLayer : (longestPath blocksWithOnlyUsedParents newUsed (i + 1) graph layers edges)
+  where
+    newLayer = (-i, map oneLayer blockNodes)
+
+    oneLayer :: [(X, UINode)] -> [(UINode, X)]
+    oneLayer ns = map (\(x, n) -> (n, x)) ns
+
+    nextPossibleLayerNodes = mapMaybe layerChild (concat blockNodes)
+    --                nextPossibleLayerNodesBackwards = catMaybes (map layerParent (concat blockNodes))
+
+    nextLayerRoots = myNub2 (map findRoot nextPossibleLayerNodes)
+    --                nextLayerRootsBackwards = myNub2 (map findRoot nextPossibleLayerNodesBackwards)
+
+    findRoot :: (X, UINode) -> (X, UINode)
+    findRoot (x, n)
+      | isJust lu && x >= 0 -- Debug.Trace.trace ("findRoot " ++ show (x,n)) $
+        =
+        findRoot (x - 1, myFromJust 515 lu)
+      | otherwise = (x, n)
+      where
+        lu = Map.lookup n reverseBlocks
+
+    getBoxId n = maybe Nothing Common.boxId nest
+      where nest = maybe Nothing Common.nestingFeatures lu
+            lu = Graph.lookupNode n graph
+
+    reverseBlocks = Map.fromList (map swap edges)
+
+    layerConnections = Map.fromList $ concatMap tuples layers
+    reverseLayerConnections = Map.fromList $ concatMap (tuples . reverse) layers
+
+    bcs :: [[(X, UINode)]]
+    bcs = -- Debug.Trace.trace ("bcs " ++ show (nextLayerRoots, map (blockChildren edgeMap) nextLayerRoots)) $
+          map (blockChildren edgeMap) nextLayerRoots
+    edgeMap = Map.fromList edges
+
+    blocksWithOnlyUsedParents = rmdups $ filter noParentOrUsed bcs
+ 
+    layerChild (x, n) = maybe Nothing (\node -> Just (x, node)) (Map.lookup n reverseLayerConnections)
+    --                layerParent (x,n) = maybe Nothing (\node -> Just (x,node)) (Map.lookup n layerConnections)
+    newUsed = used ++ blns
+    blns = map snd (concat blockNodes)
+    noParentOrUsed :: [(X, UINode)] -> Bool
+    noParentOrUsed block =
+      if all noParOrUsed block && not (sameBoxId block) -- && (not (sameBoxId block || (not hasBlockWithSameBoxId && not (sameBoxId block))))
+       then -- Debug.Trace.trace ("\nnoParentOrUsed "++ show (map snd block, Map.lookup (snd (head block)) layerConnections, map (map snd) blockNodes, "samBoxId", sameBoxId block) ++"\n" ++ 
+            --                  show ("bcs", bcs) ++ "\n" ++ 
+            --                  show ("blocksWithSameBoxId",map (map snd) blocksWithSameBoxId) ++ "\n" ++ 
+            --                  show ("filter f           ", map (map snd) (filter f blocksWithSameBoxId)) ++ "\n" ++
+            --                  show ("hasBlockWithSameBoxId", hasBlockWithSameBoxId) ++ "\n" ++
+            --                  show ("not (sameBoxId block)", not (sameBoxId block), "map sameBoxId bcs", map sameBoxId bcs)
+            --                  ) $
+           all noParOrUsed block -- && (sameBoxId block || (not hasBlockWithSameBoxId && not (sameBoxId block)))
+      else all noParOrUsed block
+        where hasBlockWithSameBoxId = not (null (filter f blocksWithSameBoxId)) --(blocksWithSameBoxId \\ block))
+              f bs = not ((snd (head block)) `elem` (map snd bs))
+                  
+              blocksWithSameBoxId :: [[(X, UINode)]]
+              blocksWithSameBoxId = filter sameBoxId2 bcs
+              sameBoxId2 b0 | isNothing lu = True
+                            | otherwise = getBoxId (snd (head b0)) == getBoxId (fromJust lu)
+                where lu = Map.lookup (snd (head block)) layerConnections
+              block2 = concat blockNodes
+              sameBoxId b0 | isNothing lu = True
+                           | otherwise = getBoxId (snd (head b0)) == getBoxId (fromJust lu)
+                where lu = Map.lookup (snd (head b0)) layerConnections
+--              curBoxId = getBoxId (snd (head block))
+    noParOrUsed (_, n) =
+      -- Debug.Trace.trace ("noParOrUsed "++ show (n,lu)) $
+      (isNothing lu || (isJust lu && elem (myFromJust 514 lu) newUsed))
+      where
+        lu = Map.lookup n layerConnections
+
+
+-- * Longest Path  for vertical layers
 --
 
 type UnconnectedChildren = [UINode]
@@ -1569,6 +1652,3 @@ graphvizNodes (gr, m) = concatMap ((++ "\n") . sh) (I.toList (Graph.nodeLabels g
 
 listShow :: Show a => [a] -> String
 listShow ls = concatMap ((++ "\n"). show) ls
-
-ranksame :: [[UINode]] -> String
-ranksame ls = "{ rank=same; " ++ intercalate "," (map show ls) ++ " }\n"

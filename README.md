@@ -57,10 +57,19 @@ This algorithm was implemented to develop a visual programming environment, whic
 ## Y-Placement in Javascript
 The normal layout is to use a table and then to place each node in a table cell.
 This can lead to unpleasant white space when a node is big and other nodes are small:
+
+&nbsp;
+
 ![table layout](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/graphs/tableLayout.svg)
 
 If you display the graph in html this can be solved by replacing the table with individually sized divs in a column.
+
+&nbsp;
+
 ![individual sized divs](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/graphs/divsColumn.svg)
+
+&nbsp;
+
 The code to calculate the size of the divs in my application could only be done in javascript because the size of the nodes depend on the the html+css layouting.
 In [graph-drawing.js](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/src/Graph/graph-drawing.js) there is a function setHeightsOfColumnCells which does the y-placement in javasript.
 

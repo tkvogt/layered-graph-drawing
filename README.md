@@ -61,7 +61,7 @@ This can lead to unpleasant white space when a node is big and other nodes are s
 
 If you display the graph in html this can be solved by replacing the table with individually sized divs in a column.
 ![individual sized divs](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/graphs/divsColumn.svg)
-The code to calculate the size of the divs can only be done in javascript because the size of the nodes depend on the the html+css layouting.
+The code to calculate the size of the divs in my application could only be done in javascript because the size of the nodes depend on the the html+css layouting.
 In [graph-drawing.js](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/src/Graph/graph-drawing.js) there is a function setHeightsOfColumnCells which does the y-placement in javasript.
 
 ## Example Usage

@@ -1,5 +1,5 @@
 name:                layered-graph-drawing
-version:             0.1.0.0
+version:             0.2.0.0
 synopsis:            Layered Graph Drawing after Sugiyama
 description:         Calculates the positions of graph nodes in a table with layered graph drawing
 homepage:            https://github.com/tkvogt/layered-graph-drawing

@@ -54,6 +54,16 @@ The module [SubgraphWindows](https://github.com/tkvogt/layered-graph-drawing/blo
 
 This algorithm was implemented to develop a visual programming environment, which is work in progress: www.autocompletion.io
 
+## Y-Placement in Javascript
+The normal layout is to use a table and then to place each node in a table cell.
+This can lead to unpleasant white space when a node is big and other nodes are small:
+![table layout](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/graphs/tableLayout.svg)
+
+If you display the graph in html this can be solved by replacing the table with individually sized divs in a column.
+![individual sized divs](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/graphs/divsColumn.svg)
+The code to calculate the size of the divs can only be done in javascript because the size of the nodes depend on the the html+css layouting.
+In [graph-drawing.js](https://raw.githubusercontent.com/tkvogt/layered-graph-drawing/main/src/Graph/graph-drawing.js) there is a function setHeightsOfColumnCells which does the y-placement in javasript.
+
 ## Example Usage
 You can test this library by 
  * Uncommenting the ```diagrams```-code in [app/Main.hs](https://github.com/tkvogt/layered-graph-drawing/blob/main/app/Main.hs) and uncommenting the ```diagrams```-dependencies in [layerd-graph-drawing.cabal](https://github.com/tkvogt/layered-graph-drawing/blob/main/layered-graph-drawing.cabal)
